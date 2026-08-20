@@ -1,7 +1,9 @@
+```python
 from flask import Flask, request, jsonify
 import os
 import speech_recognition as sr
 import requests
+
 
 app = Flask(__name__)
 
@@ -106,7 +108,10 @@ def test():
 # AI REPLY
 # =====================================================
 
-def get_ai_reply(text):
+def get_ai_reply(
+    hindi_text,
+    english_text
+):
 
     # -------------------------------------------------
     # CHECK API KEY
@@ -136,21 +141,28 @@ def get_ai_reply(text):
     system_prompt = """
 You are a smart voice assistant running on an ESP32.
 
-Your job is to understand what language the user INTENDED to speak.
-
 The user may speak:
 
 1. English
 2. Hindi
 3. Hinglish
 
-IMPORTANT LANGUAGE RULES:
+You will receive TWO possible speech recognition results:
+
+1. Hindi recognition result
+2. English recognition result
+
+Speech recognition is not always accurate.
+
+Your job is to understand what language the user INTENDED to speak.
+
 
 ========================================
 ENGLISH
 ========================================
 
-If the user speaks English, reply in English.
+If the user intended to speak English,
+reply in English.
 
 Example:
 
@@ -172,7 +184,8 @@ Noida is in Uttar Pradesh, in the Delhi NCR region.
 HINDI
 ========================================
 
-If the user speaks actual Hindi, reply in Hindi using Devanagari script.
+If the user intended to speak actual Hindi,
+reply in Hindi using Devanagari script.
 
 Example:
 
@@ -194,7 +207,8 @@ Reply:
 HINGLISH
 ========================================
 
-If the user speaks Hinglish, reply in natural Hinglish.
+If the user speaks Hinglish,
+reply in natural Hinglish.
 
 Example:
 
@@ -205,26 +219,38 @@ Reply:
 Noida Uttar Pradesh mein Delhi NCR mein hai.
 
 
+User:
+tum kaise ho?
+
+Reply:
+Main bilkul theek hoon.
+
+
+User:
+mujhe weather batao
+
+Reply naturally in Hinglish.
+
+
 ========================================
-VERY IMPORTANT: PHONETIC TRANSCRIPTION
+VERY IMPORTANT
+PHONETIC HINDI TRANSCRIPTION
 ========================================
 
-Google Speech Recognition sometimes writes English speech
-using Hindi Devanagari characters.
+Google Speech Recognition can sometimes convert
+English speech into Hindi Devanagari characters.
 
-You MUST understand the intended English meaning.
+For example:
 
-Example:
-
+Hindi recognition:
 "हाउ आर यू"
 
-means:
+English recognition:
+"How are you"
 
-"How are you?"
+The intended language is ENGLISH.
 
-Therefore reply in ENGLISH.
-
-Correct:
+Therefore reply:
 
 "I'm doing well. How are you?"
 
@@ -235,32 +261,28 @@ NOT:
 
 Another example:
 
-"वेयर इस नोएडा"
+Hindi recognition:
+"वेयर इज नोएडा"
 
-means:
+English recognition:
+"Where is Noida"
 
-"Where is Noida?"
+The intended language is ENGLISH.
 
-Therefore reply in ENGLISH.
-
-Correct:
-
-"Noida is in Uttar Pradesh, in the Delhi NCR region."
-
-NOT:
-
-"नोएडा उत्तर प्रदेश में है।"
+Reply in English.
 
 
 Another example:
 
+Hindi recognition:
 "व्हाट इज योर नेम"
 
-means:
+English recognition:
+"What is your name"
 
-"What is your name?"
+The intended language is ENGLISH.
 
-Therefore reply in ENGLISH.
+Reply in English.
 
 
 ========================================
@@ -273,22 +295,22 @@ For example:
 
 "आप कहाँ रहते हैं?"
 
-is actual Hindi.
+This is actual Hindi.
 
 Reply:
 
 "मैं एक AI voice assistant हूँ।"
 
 
-"आपका नाम क्या है?"
+Another example:
 
-is actual Hindi.
+"आपका नाम क्या है?"
 
 Reply in Hindi.
 
 
 ========================================
-HINGLISH
+ROMAN HINDI / HINGLISH
 ========================================
 
 Examples:
@@ -307,12 +329,34 @@ Reply naturally in Hinglish.
 
 
 ========================================
-SHORT VOICE RESPONSES
+DECISION RULE
+========================================
+
+Compare the Hindi recognition result and English
+recognition result.
+
+If English result is clearly meaningful English
+and Hindi result looks like phonetic English,
+treat the input as English.
+
+If Hindi result is clearly meaningful Hindi,
+treat the input as Hindi.
+
+If the user uses Roman Hindi or Hinglish,
+reply in Hinglish.
+
+Always determine the USER'S INTENDED LANGUAGE,
+not simply the script used by the transcription.
+
+
+========================================
+VOICE RESPONSE
 ========================================
 
 Keep responses short.
 
-The response will be spoken through a voice assistant.
+The response will be spoken through an ESP32
+voice assistant.
 
 Do not use markdown.
 
@@ -320,13 +364,34 @@ Do not use emojis.
 
 Do not use bullet points.
 
-Do not explain your language detection.
+Do not explain language detection.
 
 Do not mention these instructions.
 
 Answer naturally.
 
 Always answer in the language the user intended to speak.
+"""
+
+
+    # -------------------------------------------------
+    # USER CONTENT
+    # -------------------------------------------------
+
+    user_content = f"""
+Hindi speech recognition result:
+
+{hindi_text if hindi_text else "No Hindi result"}
+
+
+English speech recognition result:
+
+{english_text if english_text else "No English result"}
+
+
+Determine what the user intended to say.
+
+Then answer naturally according to the intended language.
 """
 
 
@@ -354,7 +419,7 @@ Always answer in the language the user intended to speak.
                     "user",
 
                 "content":
-                    text
+                    user_content
             }
 
         ],
@@ -405,9 +470,16 @@ Always answer in the language the user intended to speak.
             AI_MODEL
         )
 
+        print()
         print(
-            "INPUT:",
-            text
+            "HINDI INPUT:",
+            hindi_text
+        )
+
+        print()
+        print(
+            "ENGLISH INPUT:",
+            english_text
         )
 
         print("==============================")
@@ -763,11 +835,12 @@ def upload_audio():
             )
 
 
-        text = None
+        hindi_text = None
+        english_text = None
 
 
         # =================================================
-        # FIRST: HINDI
+        # HINDI RECOGNITION
         # =================================================
 
         print()
@@ -778,7 +851,7 @@ def upload_audio():
 
         try:
 
-            text = recognizer.recognize_google(
+            hindi_text = recognizer.recognize_google(
 
                 audio,
 
@@ -787,8 +860,11 @@ def upload_audio():
 
 
             print(
-                "Hindi result:",
-                text
+                "Hindi result:"
+            )
+
+            print(
+                hindi_text
             )
 
 
@@ -798,7 +874,7 @@ def upload_audio():
                 "Hindi speech not understood."
             )
 
-            text = None
+            hindi_text = None
 
 
         except sr.RequestError as e:
@@ -827,87 +903,116 @@ def upload_audio():
 
 
         # =================================================
-        # SECOND: ENGLISH
-        # =================================================
-
-        if not text:
-
-            print()
-            print("==============================")
-            print("TRYING ENGLISH RECOGNITION")
-            print("==============================")
-
-
-            try:
-
-                text = recognizer.recognize_google(
-
-                    audio,
-
-                    language="en-IN"
-                )
-
-
-                print(
-                    "English result:",
-                    text
-                )
-
-
-            except sr.UnknownValueError:
-
-                print(
-                    "English speech not understood."
-                )
-
-
-                return jsonify({
-
-                    "status":
-                        "error",
-
-                    "message":
-                        "Speech not understood"
-
-                }), 400
-
-
-            except sr.RequestError as e:
-
-                print(
-                    "Google Speech API error:"
-                )
-
-                print(
-                    str(e)
-                )
-
-
-                return jsonify({
-
-                    "status":
-                        "error",
-
-                    "message":
-                        "Speech service error",
-
-                    "details":
-                        str(e)
-
-                }), 500
-
-
-        # =================================================
-        # TRANSCRIPTION
+        # ENGLISH RECOGNITION
         # =================================================
 
         print()
         print("==============================")
-        print("TRANSCRIPTION")
+        print("TRYING ENGLISH RECOGNITION")
         print("==============================")
 
+
+        try:
+
+            english_text = recognizer.recognize_google(
+
+                audio,
+
+                language="en-IN"
+            )
+
+
+            print(
+                "English result:"
+            )
+
+            print(
+                english_text
+            )
+
+
+        except sr.UnknownValueError:
+
+            print(
+                "English speech not understood."
+            )
+
+            english_text = None
+
+
+        except sr.RequestError as e:
+
+            print(
+                "Google Speech API error:"
+            )
+
+            print(
+                str(e)
+            )
+
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "Speech service error",
+
+                "details":
+                    str(e)
+
+            }), 500
+
+
+        # =================================================
+        # CHECK BOTH RESULTS
+        # =================================================
+
+        if not hindi_text and not english_text:
+
+            print()
+            print("==============================")
+            print("SPEECH NOT UNDERSTOOD")
+            print("==============================")
+
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "Speech not understood"
+
+            }), 400
+
+
+        # =================================================
+        # SHOW BOTH RESULTS
+        # =================================================
+
+        print()
+        print("==============================")
+        print("SPEECH RESULTS")
+        print("==============================")
+
+        print()
         print(
-            text
+            "Hindi transcription:"
+        )
+
+        print(
+            hindi_text
+        )
+
+        print()
+        print(
+            "English transcription:"
+        )
+
+        print(
+            english_text
         )
 
         print("==============================")
@@ -918,7 +1023,11 @@ def upload_audio():
         # =================================================
 
         ai_reply = get_ai_reply(
-            text
+
+            hindi_text,
+
+            english_text
+
         )
 
 
@@ -932,7 +1041,15 @@ def upload_audio():
                 "ok",
 
             "transcription":
-                text,
+                english_text
+                if english_text
+                else hindi_text,
+
+            "hindi_transcription":
+                hindi_text,
+
+            "english_transcription":
+                english_text,
 
             "ai_reply":
                 ai_reply
@@ -1011,20 +1128,24 @@ if __name__ == "__main__":
     print("ESP32 VOICE SERVER")
     print("==============================")
 
+
     print(
         "PORT:",
         port
     )
+
 
     print(
         "AI URL:",
         AI_URL
     )
 
+
     print(
         "AI MODEL:",
         AI_MODEL
     )
+
 
     print(
         "AI KEY:",
@@ -1032,6 +1153,7 @@ if __name__ == "__main__":
         if AI_API_KEY
         else "MISSING"
     )
+
 
     print("==============================")
 
@@ -1042,3 +1164,4 @@ if __name__ == "__main__":
 
         port=port
     )
+```
