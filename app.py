@@ -13,11 +13,18 @@ app = Flask(__name__)
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 if GROQ_API_KEY:
-    groq_client = Groq(api_key=GROQ_API_KEY)
-    print("Groq AI: READY")
+    groq_client = Groq(
+        api_key=GROQ_API_KEY
+    )
+    print("================================")
+    print("GROQ AI: READY")
+    print("================================")
 else:
     groq_client = None
-    print("Groq AI: API KEY NOT FOUND")
+
+    print("================================")
+    print("GROQ AI: API KEY NOT FOUND")
+    print("================================")
 
 
 # =====================================================
@@ -76,21 +83,24 @@ def get_ai_reply(text):
 
     if not groq_client:
 
-        return "AI key is not configured on the server."
+        print("GROQ_API_KEY NOT FOUND")
+
+        return "AI key nahi mili."
 
 
     try:
 
         print()
         print("==============================")
-        print("ASKING AI")
+        print("GROQ AI REQUEST")
         print("==============================")
-        print(text)
+        print("Question:", text)
 
 
         response = groq_client.chat.completions.create(
 
-            model="llama-3.1-8b-instant",
+            # Current Groq model
+            model="openai/gpt-oss-20b",
 
             messages=[
 
@@ -98,14 +108,19 @@ def get_ai_reply(text):
                     "role": "system",
                     "content": (
                         "You are a helpful voice assistant for an ESP32. "
-                        "Reply naturally and briefly. "
-                        "The user may speak Hindi, English, or Hinglish. "
-                        "Reply in the same language/style as the user. "
-                        "If the user speaks Hindi, answer in Hindi. "
-                        "If the user speaks English, answer in English. "
-                        "If the user uses Hinglish, answer in Hinglish. "
-                        "Keep answers short because they will be shown "
-                        "on a small voice device."
+
+                        "The user may speak Hindi, English, "
+                        "or Hinglish. "
+
+                        "If the user speaks Hindi, reply in Hindi. "
+
+                        "If the user speaks English, reply in English. "
+
+                        "If the user speaks Hinglish, reply in Hinglish. "
+
+                        "Keep replies short, natural and useful. "
+
+                        "Do not give very long answers."
                     )
                 },
 
@@ -118,7 +133,7 @@ def get_ai_reply(text):
 
             temperature=0.5,
 
-            max_tokens=150
+            max_completion_tokens=150
         )
 
 
@@ -127,8 +142,9 @@ def get_ai_reply(text):
 
         print()
         print("==============================")
-        print("AI REPLY")
+        print("GROQ SUCCESS")
         print("==============================")
+        print("AI REPLY:")
         print(reply)
         print("==============================")
 
@@ -140,8 +156,12 @@ def get_ai_reply(text):
 
         print()
         print("==============================")
-        print("AI ERROR")
+        print("GROQ ERROR")
         print("==============================")
+        print("ERROR TYPE:")
+        print(type(e).__name__)
+        print()
+        print("ERROR:")
         print(str(e))
         print("==============================")
 
@@ -157,6 +177,10 @@ def get_ai_reply(text):
 def upload_audio():
 
     try:
+
+        # =================================================
+        # RECEIVE AUDIO
+        # =================================================
 
         audio_data = request.get_data()
 
@@ -186,11 +210,15 @@ def upload_audio():
             f.write(audio_data)
 
 
+        # =================================================
+        # SPEECH RECOGNIZER
+        # =================================================
+
         recognizer = sr.Recognizer()
 
 
         # =================================================
-        # READ AUDIO
+        # READ WAV
         # =================================================
 
         with sr.AudioFile(filename) as source:
@@ -199,7 +227,7 @@ def upload_audio():
 
 
         # =================================================
-        # HINDI TRY
+        # HINDI
         # =================================================
 
         hindi_text = None
@@ -211,13 +239,17 @@ def upload_audio():
                 language="hi-IN"
             )
 
-            print("Hindi:", hindi_text)
+            print()
+            print("HINDI RESULT:")
+            print(hindi_text)
 
         except sr.UnknownValueError:
 
-            pass
+            print("Hindi speech not recognized.")
 
         except sr.RequestError as e:
+
+            print("Google Speech Error:", str(e))
 
             return jsonify({
                 "status": "error",
@@ -227,7 +259,7 @@ def upload_audio():
 
 
         # =================================================
-        # ENGLISH TRY
+        # ENGLISH
         # =================================================
 
         english_text = None
@@ -239,13 +271,17 @@ def upload_audio():
                 language="en-IN"
             )
 
-            print("English:", english_text)
+            print()
+            print("ENGLISH RESULT:")
+            print(english_text)
 
         except sr.UnknownValueError:
 
-            pass
+            print("English speech not recognized.")
 
         except sr.RequestError as e:
+
+            print("Google Speech Error:", str(e))
 
             return jsonify({
                 "status": "error",
@@ -275,7 +311,7 @@ def upload_audio():
 
 
         # =================================================
-        # TRANSCRIPTION
+        # TRANSCRIPTION RESULT
         # =================================================
 
         print()
@@ -287,7 +323,7 @@ def upload_audio():
 
 
         # =================================================
-        # AI
+        # SEND TO AI
         # =================================================
 
         ai_reply = get_ai_reply(text)
@@ -296,6 +332,15 @@ def upload_audio():
         # =================================================
         # FINAL RESPONSE
         # =================================================
+
+        print()
+        print("==============================")
+        print("FINAL RESPONSE")
+        print("==============================")
+        print("Text:", text)
+        print("AI:", ai_reply)
+        print("==============================")
+
 
         return jsonify({
 
@@ -309,7 +354,7 @@ def upload_audio():
 
 
     # =====================================================
-    # ERRORS
+    # ERROR
     # =====================================================
 
     except Exception as e:
@@ -318,6 +363,7 @@ def upload_audio():
         print("==============================")
         print("SERVER ERROR")
         print("==============================")
+        print(type(e).__name__)
         print(str(e))
         print("==============================")
 
@@ -332,7 +378,7 @@ def upload_audio():
 
 
 # =====================================================
-# START
+# START SERVER
 # =====================================================
 
 if __name__ == "__main__":
