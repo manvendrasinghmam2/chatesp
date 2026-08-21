@@ -3,9 +3,10 @@ import os
 import speech_recognition as sr
 import requests
 import re
-import time
+import tempfile
 
 app = Flask(__name__)
+
 
 # =====================================================
 # CONFIGURATION
@@ -18,28 +19,14 @@ AI_URL = os.environ.get(
     "https://api.groq.com/openai/v1/chat/completions"
 )
 
+# IMPORTANT:
+# llama-3.1-8b-instant was deprecated by Groq.
+# Use current recommended replacement.
 AI_MODEL = os.environ.get(
     "AI_MODEL",
-    "llama-3.1-8b-instant"
+    "openai/gpt-oss-20b"
 )
 
-# =====================================================
-# BASIC SETTINGS
-# =====================================================
-
-MAX_AUDIO_SIZE = 500000
-
-WAKE_WORDS = [
-    "hello",
-    "helo",
-    "hallo",
-    "hellow",
-    "hello assistant",
-    "hey hello",
-    "हेलो",
-    "हैलो",
-    "हेल्लो",
-]
 
 # =====================================================
 # HOME
@@ -63,6 +50,100 @@ def health():
         "speech_engine": "Google Speech Recognition",
         "ai_engine": "Groq",
         "model": AI_MODEL
+    })
+
+
+# =====================================================
+# WAKE
+#
+# TEST MODE:
+#
+# ESP32 sends audio here.
+#
+# For now wake=True is returned for EVERY request.
+#
+# This is intentional.
+#
+# First we verify:
+#
+# ESP32
+#   ->
+# HTTPS
+#   ->
+# Flask
+#   ->
+# JSON
+#   ->
+# ESP32
+#
+# Later actual HELLO detection can be added.
+# =====================================================
+
+@app.route("/wake", methods=["POST", "GET"])
+def wake():
+
+    print()
+    print("==============================")
+    print("WAKE REQUEST RECEIVED")
+    print("==============================")
+
+    print("METHOD:", request.method)
+    print("CONTENT TYPE:", request.content_type)
+    print("CONTENT LENGTH:", request.content_length)
+
+    if request.method == "POST":
+
+        audio_data = request.get_data()
+
+        print(
+            "AUDIO BYTES:",
+            len(audio_data)
+        )
+
+    print("==============================")
+
+    response_data = {
+        "status": "ok",
+        "wake": True,
+        "english": "Hello",
+        "hindi": None
+    }
+
+    print("WAKE RESPONSE:")
+    print(response_data)
+
+    print("==============================")
+
+    return jsonify(response_data)
+
+
+# =====================================================
+# TEST
+# =====================================================
+
+@app.route("/test", methods=["POST"])
+def test():
+
+    data = request.get_json(silent=True)
+
+    if not data:
+
+        return jsonify({
+            "status": "error",
+            "message": "No JSON received"
+        }), 400
+
+    print()
+    print("==============================")
+    print("TEST DATA")
+    print("==============================")
+    print(data)
+    print("==============================")
+
+    return jsonify({
+        "status": "ok",
+        "message": "Data received",
+        "data": data
     })
 
 
@@ -95,7 +176,7 @@ def is_valid_query(text):
     if not text:
         return False
 
-    text = clean_text(text)
+    text = str(text).strip()
 
     if len(text) < 2:
         return False
@@ -106,368 +187,13 @@ def is_valid_query(text):
         "null",
         "no response",
         "no valid query",
-        "speech not understood",
+        "speech not understood"
     ]
 
     if text.lower() in bad_values:
         return False
 
     return True
-
-
-# =====================================================
-# NORMALIZE WAKE TEXT
-# =====================================================
-
-def normalize_wake_text(text):
-
-    text = clean_text(text)
-
-    if not text:
-        return ""
-
-    text = text.lower()
-
-    # Remove punctuation
-    text = re.sub(
-        r"[^a-zA-Z0-9\u0900-\u097F\s]",
-        " ",
-        text
-    )
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
-
-    return text.strip()
-
-
-# =====================================================
-# CHECK HELLO
-# =====================================================
-
-def is_wake_word(text):
-
-    text = normalize_wake_text(text)
-
-    if not text:
-        return False
-
-    # Exact/common phrases
-    for word in WAKE_WORDS:
-
-        if text == word.lower():
-            return True
-
-    # Hindi phonetic recognition
-    hindi_wake = [
-        "हेलो",
-        "हैलो",
-        "हेल्लो",
-        "हेलो असिस्टेंट",
-        "हैलो असिस्टेंट",
-    ]
-
-    for word in hindi_wake:
-
-        if word in text:
-            return True
-
-    # English recognition may return
-    # "hello hello" etc.
-    if "hello" in text:
-        return True
-
-    # Phonetic failures
-    phonetic_words = [
-        "helo",
-        "hallo",
-        "hellow",
-        "heloo",
-        "hullo",
-    ]
-
-    for word in phonetic_words:
-
-        if word in text:
-            return True
-
-    return False
-
-
-# =====================================================
-# RECOGNIZE AUDIO
-# =====================================================
-
-def recognize_audio(audio_data):
-
-    recognizer = sr.Recognizer()
-
-    recognizer.energy_threshold = 250
-
-    recognizer.dynamic_energy_threshold = True
-
-    recognizer.pause_threshold = 0.6
-
-    recognizer.non_speaking_duration = 0.3
-
-    temp_filename = "/tmp/esp32_voice.wav"
-
-    try:
-
-        with open(
-            temp_filename,
-            "wb"
-        ) as f:
-
-            f.write(audio_data)
-
-        with sr.AudioFile(
-            temp_filename
-        ) as source:
-
-            audio = recognizer.record(
-                source
-            )
-
-        hindi_text = None
-        english_text = None
-
-        # =================================================
-        # HINDI
-        # =================================================
-
-        try:
-
-            hindi_text = recognizer.recognize_google(
-                audio,
-                language="hi-IN"
-            )
-
-            hindi_text = clean_text(
-                hindi_text
-            )
-
-        except sr.UnknownValueError:
-
-            hindi_text = None
-
-        except sr.RequestError as e:
-
-            print(
-                "Google Hindi error:",
-                str(e)
-            )
-
-        # =================================================
-        # ENGLISH
-        # =================================================
-
-        try:
-
-            english_text = recognizer.recognize_google(
-                audio,
-                language="en-IN"
-            )
-
-            english_text = clean_text(
-                english_text
-            )
-
-        except sr.UnknownValueError:
-
-            english_text = None
-
-        except sr.RequestError as e:
-
-            print(
-                "Google English error:",
-                str(e)
-            )
-
-        return (
-            hindi_text,
-            english_text
-        )
-
-    except Exception as e:
-
-        print(
-            "AUDIO RECOGNITION ERROR:",
-            type(e).__name__,
-            str(e)
-        )
-
-        return (
-            None,
-            None
-        )
-
-
-# =====================================================
-# WAKE
-# =====================================================
-
-@app.route(
-    "/wake",
-    methods=["POST"]
-)
-def wake():
-
-    start_time = time.time()
-
-    print()
-    print("==============================")
-    print("WAKE REQUEST")
-    print("==============================")
-
-    try:
-
-        audio_data = request.get_data(
-            cache=False
-        )
-
-        if not audio_data:
-
-            print(
-                "WAKE: NO AUDIO"
-            )
-
-            return jsonify({
-                "status": "ok",
-                "wake": False,
-                "message": "No audio"
-            })
-
-        print(
-            "Wake audio bytes:",
-            len(audio_data)
-        )
-
-        if len(audio_data) > MAX_AUDIO_SIZE:
-
-            print(
-                "WAKE: AUDIO TOO LARGE"
-            )
-
-            return jsonify({
-                "status": "error",
-                "wake": False,
-                "message": "Audio too large"
-            }), 413
-
-        # =================================================
-        # RECOGNITION
-        # =================================================
-
-        hindi_text, english_text = recognize_audio(
-            audio_data
-        )
-
-        print()
-        print(
-            "Wake Hindi:",
-            hindi_text
-        )
-
-        print(
-            "Wake English:",
-            english_text
-        )
-
-        wake_detected = (
-            is_wake_word(hindi_text)
-            or
-            is_wake_word(english_text)
-        )
-
-        elapsed = round(
-            time.time() - start_time,
-            2
-        )
-
-        print()
-        print(
-            "Wake detected:",
-            wake_detected
-        )
-
-        print(
-            "Time:",
-            elapsed,
-            "seconds"
-        )
-
-        print("==============================")
-
-        return jsonify({
-            "status": "ok",
-            "wake": wake_detected,
-            "hindi": hindi_text,
-            "english": english_text
-        })
-
-    except Exception as e:
-
-        print()
-        print("==============================")
-        print("WAKE SERVER ERROR")
-        print("==============================")
-
-        print(
-            type(e).__name__
-        )
-
-        print(
-            str(e)
-        )
-
-        print("==============================")
-
-        return jsonify({
-            "status": "error",
-            "wake": False,
-            "message": str(e)
-        }), 500
-
-
-# =====================================================
-# TEST
-# =====================================================
-
-@app.route(
-    "/test",
-    methods=["POST"]
-)
-def test():
-
-    data = request.get_json(
-        silent=True
-    )
-
-    if not data:
-
-        return jsonify({
-            "status": "error",
-            "message": "No JSON received"
-        }), 400
-
-    print()
-    print("==============================")
-    print("TEST DATA")
-    print("==============================")
-
-    print(data)
-
-    print("==============================")
-
-    return jsonify({
-        "status": "ok",
-        "message": "Data received",
-        "data": data
-    })
 
 
 # =====================================================
@@ -479,13 +205,12 @@ def get_ai_reply(
     english_text
 ):
 
-    hindi_text = clean_text(
-        hindi_text
-    )
+    hindi_text = clean_text(hindi_text)
+    english_text = clean_text(english_text)
 
-    english_text = clean_text(
-        english_text
-    )
+    # -------------------------------------------------
+    # API KEY
+    # -------------------------------------------------
 
     if not AI_API_KEY:
 
@@ -493,14 +218,14 @@ def get_ai_reply(
         print("==============================")
         print("AI ERROR")
         print("==============================")
-
-        print(
-            "AI_API_KEY is NOT configured!"
-        )
-
+        print("AI_API_KEY is NOT configured!")
         print("==============================")
 
         return "AI response nahi mil saka."
+
+    # -------------------------------------------------
+    # VALID INPUT
+    # -------------------------------------------------
 
     if (
         not is_valid_query(hindi_text)
@@ -508,39 +233,84 @@ def get_ai_reply(
         not is_valid_query(english_text)
     ):
 
+        print()
+        print("==============================")
+        print("NO VALID QUERY")
+        print("==============================")
+
         return "Please ask your question again."
 
-    # =================================================
+    # -------------------------------------------------
     # SYSTEM PROMPT
-    # =================================================
+    # -------------------------------------------------
 
     system_prompt = """
 You are a professional bilingual voice assistant running on an ESP32.
 
-Understand the user's intended language and answer naturally.
+Your job is to understand the user's actual spoken language and answer naturally.
 
-There are two speech recognition results:
+The speech recognition system provides two possible results:
 
 1. Hindi recognition
 2. English recognition
 
-Recognition can sometimes be inaccurate.
+The recognition can sometimes be inaccurate.
 
-Compare both results and determine the user's intended meaning.
+You must understand the intended meaning.
 
-LANGUAGE RULES:
+==================================================
+LANGUAGE RULES
+==================================================
 
-If the user clearly speaks English,
+ENGLISH:
+
+If the user is clearly speaking English,
 answer completely in natural English.
 
-If the user clearly speaks Hindi,
-answer completely in Hindi using Devanagari.
+Example:
+
+User:
+How are you?
+
+Answer:
+I'm doing well. How are you?
+
+==================================================
+HINDI
+==================================================
+
+If the user is clearly speaking Hindi,
+answer completely in Hindi using Devanagari script.
+
+Example:
+
+User:
+आप कैसे हैं?
+
+Answer:
+मैं बिल्कुल ठीक हूँ। धन्यवाद।
+
+==================================================
+HINGLISH
+==================================================
 
 If the user speaks Roman Hindi or Hinglish,
-answer naturally in Hinglish.
+answer in natural Hinglish.
 
-If English speech was incorrectly recognized into Devanagari phonetically,
-prefer the English meaning.
+Example:
+
+User:
+Tum kaise ho?
+
+Answer:
+Main bilkul theek hoon. Aap kaise hain?
+
+==================================================
+PHONETIC HINDI
+==================================================
+
+Hindi recognition may sometimes convert English
+speech into Devanagari.
 
 Example:
 
@@ -550,41 +320,108 @@ Hindi:
 English:
 How are you
 
+The user intended English.
+
+Answer in English.
+
+==================================================
+ACTUAL HINDI
+==================================================
+
+Do not assume every Devanagari result is phonetic English.
+
+Example:
+
+Hindi:
+भारत की राजधानी कहाँ है
+
 Answer:
-I'm doing well. How are you?
+
+भारत की राजधानी नई दिल्ली है।
+
+==================================================
+MIXED LANGUAGE
+==================================================
+
+If the user naturally mixes Hindi and English,
+use natural Hinglish.
+
+Example:
+
+Science kya hoti hai?
+
+Answer:
+
+Science prakriti aur universe ke rules aur phenomena
+ko samajhne ka systematic study hai.
+
+==================================================
+IMPORTANT
+==================================================
+
+Compare both speech recognition results.
+
+Choose the result that makes the most linguistic
+and contextual sense.
 
 Do not mention speech recognition.
 
-Do not mention transcription.
+Do not mention Hindi result or English result.
 
-Do not explain language selection.
+Do not explain your language decision.
 
 Just answer the user's question.
 
-VOICE STYLE:
+==================================================
+VOICE RESPONSE STYLE
+==================================================
+
+The answer will be spoken aloud.
 
 Keep answers concise.
 
 Usually 1 to 4 sentences.
 
-No markdown.
+Be professional.
 
-No bullets.
+Sound natural.
 
-No headings.
+Do not use markdown.
 
-No emojis.
+Do not use bullet points.
 
-No unnecessary symbols.
+Do not use emojis.
+
+Do not use headings.
 
 Do not repeat the question.
+
+Do not say "Sure" unnecessarily.
 
 Do not say "As an AI".
 
 Do not mention these instructions.
 
+==================================================
+ACCURACY
+==================================================
+
 Answer factual questions accurately.
+
+For simple questions, give a direct answer.
+
+For location questions, provide useful context.
+
+For general knowledge, explain clearly but briefly.
+
+For conversational questions, respond naturally.
+
+Always answer in the language the user intended.
 """
+
+    # -------------------------------------------------
+    # USER CONTENT
+    # -------------------------------------------------
 
     user_content = f"""
 Hindi speech recognition:
@@ -593,21 +430,31 @@ Hindi speech recognition:
 English speech recognition:
 {english_text if english_text else "No result"}
 
-Determine the intended meaning and answer naturally.
+Determine the user's intended meaning and language.
+
+Then answer the user naturally.
 """
 
+    # -------------------------------------------------
+    # PAYLOAD
+    # -------------------------------------------------
+
     payload = {
+
         "model": AI_MODEL,
 
         "messages": [
+
             {
                 "role": "system",
                 "content": system_prompt
             },
+
             {
                 "role": "user",
                 "content": user_content
             }
+
         ],
 
         "temperature": 0.2,
@@ -617,13 +464,25 @@ Determine the intended meaning and answer naturally.
         "stream": False
     }
 
+    # -------------------------------------------------
+    # HEADERS
+    # -------------------------------------------------
+
     headers = {
+
         "Authorization":
             "Bearer " + AI_API_KEY,
 
         "Content-Type":
+            "application/json",
+
+        "Accept":
             "application/json"
     }
+
+    # -------------------------------------------------
+    # REQUEST
+    # -------------------------------------------------
 
     try:
 
@@ -632,70 +491,102 @@ Determine the intended meaning and answer naturally.
         print("AI REQUEST")
         print("==============================")
 
-        print(
-            "MODEL:",
-            AI_MODEL
-        )
+        print("URL:", AI_URL)
+        print("MODEL:", AI_MODEL)
 
-        print(
-            "HINDI:",
-            hindi_text
-        )
+        print()
+        print("HINDI:")
+        print(hindi_text)
 
-        print(
-            "ENGLISH:",
-            english_text
-        )
+        print()
+        print("ENGLISH:")
+        print(english_text)
 
         print("==============================")
 
         response = requests.post(
+
             AI_URL,
+
             headers=headers,
+
             json=payload,
+
             timeout=35
         )
 
         print()
+        print("==============================")
+        print("AI RESPONSE")
+        print("==============================")
+
         print(
-            "AI HTTP:",
+            "HTTP:",
             response.status_code
         )
 
+        # -------------------------------------------------
+        # ERROR
+        # -------------------------------------------------
+
         if response.status_code != 200:
 
+            print()
+            print("AI API ERROR")
+
             print(
-                "AI BODY:",
-                response.text
+                response.text[:2000]
             )
 
+            print("==============================")
+
             return "AI response nahi mil saka."
+
+        # -------------------------------------------------
+        # JSON
+        # -------------------------------------------------
 
         try:
 
             data = response.json()
 
-        except Exception:
+        except Exception as e:
+
+            print(
+                "JSON ERROR:",
+                str(e)
+            )
 
             return "AI response nahi mil saka."
 
-        choices = data.get(
-            "choices"
-        )
+        # -------------------------------------------------
+        # CHOICES
+        # -------------------------------------------------
+
+        choices = data.get("choices")
 
         if not choices:
 
             print(
-                "NO AI CHOICE:",
-                data
+                "NO AI CHOICE"
             )
 
+            print(data)
+
             return "AI response nahi mil saka."
+
+        # -------------------------------------------------
+        # MESSAGE
+        # -------------------------------------------------
 
         message = choices[0].get(
             "message",
             {}
         )
+
+        # -------------------------------------------------
+        # CONTENT
+        # -------------------------------------------------
 
         reply = message.get(
             "content",
@@ -703,17 +594,22 @@ Determine the intended meaning and answer naturally.
         )
 
         if reply is None:
-
             reply = ""
 
         reply = str(
             reply
         ).strip()
 
+        # -------------------------------------------------
+        # CLEAN
+        # -------------------------------------------------
+
         reply = reply.replace(
             "```",
             ""
-        ).strip()
+        )
+
+        reply = reply.strip()
 
         prefixes = [
             "AI:",
@@ -723,17 +619,29 @@ Determine the intended meaning and answer naturally.
 
         for prefix in prefixes:
 
-            if reply.startswith(
-                prefix
-            ):
+            if reply.startswith(prefix):
 
                 reply = reply[
                     len(prefix):
                 ].strip()
 
+        # -------------------------------------------------
+        # EMPTY
+        # -------------------------------------------------
+
         if not reply:
 
+            print(
+                "EMPTY AI RESPONSE"
+            )
+
+            print(data)
+
             return "AI response nahi mil saka."
+
+        # -------------------------------------------------
+        # SUCCESS
+        # -------------------------------------------------
 
         print()
         print("==============================")
@@ -746,30 +654,54 @@ Determine the intended meaning and answer naturally.
 
         return reply
 
+    # -------------------------------------------------
+    # TIMEOUT
+    # -------------------------------------------------
+
     except requests.exceptions.Timeout:
 
-        print(
-            "AI TIMEOUT"
-        )
+        print()
+        print("==============================")
+        print("AI TIMEOUT")
+        print("==============================")
 
         return "AI response nahi mil saka."
+
+    # -------------------------------------------------
+    # CONNECTION
+    # -------------------------------------------------
 
     except requests.exceptions.ConnectionError as e:
 
-        print(
-            "AI CONNECTION ERROR:",
-            str(e)
-        )
+        print()
+        print("==============================")
+        print("AI CONNECTION ERROR")
+        print("==============================")
+
+        print(str(e))
 
         return "AI response nahi mil saka."
 
+    # -------------------------------------------------
+    # GENERAL
+    # -------------------------------------------------
+
     except Exception as e:
 
+        print()
+        print("==============================")
+        print("AI EXCEPTION")
+        print("==============================")
+
         print(
-            "AI EXCEPTION:",
-            type(e).__name__,
+            type(e).__name__
+        )
+
+        print(
             str(e)
         )
+
+        print("==============================")
 
         return "AI response nahi mil saka."
 
@@ -784,62 +716,198 @@ Determine the intended meaning and answer naturally.
 )
 def upload_audio():
 
-    start_time = time.time()
+    filename = None
 
     try:
 
-        print()
-        print("==============================")
-        print("QUESTION AUDIO")
-        print("==============================")
+        # -------------------------------------------------
+        # RECEIVE AUDIO
+        # -------------------------------------------------
 
-        audio_data = request.get_data(
-            cache=False
-        )
+        audio_data = request.get_data()
 
         if not audio_data:
 
             print(
-                "NO AUDIO RECEIVED"
+                "ERROR: No audio received"
             )
 
             return jsonify({
-                "status": "error",
-                "message": "No audio received",
+
+                "status":
+                    "error",
+
+                "message":
+                    "No audio received",
+
                 "ai_reply":
                     "Please ask your question again."
+
             }), 400
+
+        print()
+        print("==============================")
+        print("AUDIO RECEIVED")
+        print("==============================")
 
         print(
             "Audio bytes:",
             len(audio_data)
         )
 
-        if len(audio_data) > MAX_AUDIO_SIZE:
+        print("==============================")
 
-            return jsonify({
-                "status": "error",
-                "message": "Audio too large"
-            }), 413
+        # -------------------------------------------------
+        # TEMP WAV FILE
+        # -------------------------------------------------
 
-        # =================================================
-        # RECOGNIZE
-        # =================================================
-
-        hindi_text, english_text = recognize_audio(
-            audio_data
+        fd, filename = tempfile.mkstemp(
+            suffix=".wav"
         )
+
+        os.close(fd)
+
+        with open(
+            filename,
+            "wb"
+        ) as f:
+
+            f.write(
+                audio_data
+            )
+
+        # -------------------------------------------------
+        # SPEECH RECOGNIZER
+        # -------------------------------------------------
+
+        recognizer = sr.Recognizer()
+
+        with sr.AudioFile(
+            filename
+        ) as source:
+
+            audio = recognizer.record(
+                source
+            )
+
+        hindi_text = None
+        english_text = None
+
+        # =================================================
+        # HINDI
+        # =================================================
 
         print()
-        print(
-            "Hindi:",
-            hindi_text
-        )
+        print("==============================")
+        print("HINDI SPEECH")
+        print("==============================")
 
-        print(
-            "English:",
-            english_text
-        )
+        try:
+
+            hindi_text = recognizer.recognize_google(
+
+                audio,
+
+                language="hi-IN"
+            )
+
+            hindi_text = clean_text(
+                hindi_text
+            )
+
+            print(
+                "Hindi:",
+                hindi_text
+            )
+
+        except sr.UnknownValueError:
+
+            print(
+                "Hindi not understood."
+            )
+
+            hindi_text = None
+
+        except sr.RequestError as e:
+
+            print(
+                "Google Speech error:",
+                str(e)
+            )
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "Speech service error",
+
+                "details":
+                    str(e),
+
+                "ai_reply":
+                    "Speech service error."
+
+            }), 500
+
+        # =================================================
+        # ENGLISH
+        # =================================================
+
+        print()
+        print("==============================")
+        print("ENGLISH SPEECH")
+        print("==============================")
+
+        try:
+
+            english_text = recognizer.recognize_google(
+
+                audio,
+
+                language="en-IN"
+            )
+
+            english_text = clean_text(
+                english_text
+            )
+
+            print(
+                "English:",
+                english_text
+            )
+
+        except sr.UnknownValueError:
+
+            print(
+                "English not understood."
+            )
+
+            english_text = None
+
+        except sr.RequestError as e:
+
+            print(
+                "Google Speech error:",
+                str(e)
+            )
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "Speech service error",
+
+                "details":
+                    str(e),
+
+                "ai_reply":
+                    "Speech service error."
+
+            }), 500
 
         # =================================================
         # VALIDATION
@@ -851,12 +919,16 @@ def upload_audio():
             not is_valid_query(english_text)
         ):
 
-            print(
-                "SPEECH NOT UNDERSTOOD"
-            )
+            print()
+            print("==============================")
+            print("SPEECH NOT UNDERSTOOD")
+            print("==============================")
 
             return jsonify({
-                "status": "error",
+
+                "status":
+                    "error",
+
                 "message":
                     "Speech not understood",
 
@@ -871,14 +943,38 @@ def upload_audio():
 
                 "ai_reply":
                     "Please ask your question again."
+
             }), 400
+
+        # =================================================
+        # RESULTS
+        # =================================================
+
+        print()
+        print("==============================")
+        print("SPEECH RESULTS")
+        print("==============================")
+
+        print(
+            "Hindi:",
+            hindi_text
+        )
+
+        print(
+            "English:",
+            english_text
+        )
+
+        print("==============================")
 
         # =================================================
         # AI
         # =================================================
 
         ai_reply = get_ai_reply(
+
             hindi_text,
+
             english_text
         )
 
@@ -889,15 +985,16 @@ def upload_audio():
         if is_valid_query(
             english_text
         ):
+
             transcription = english_text
 
         else:
+
             transcription = hindi_text
 
-        elapsed = round(
-            time.time() - start_time,
-            2
-        )
+        # =================================================
+        # FINAL
+        # =================================================
 
         response_data = {
 
@@ -926,12 +1023,6 @@ def upload_audio():
             response_data
         )
 
-        print(
-            "Processing:",
-            elapsed,
-            "seconds"
-        )
-
         print("==============================")
 
         return jsonify(
@@ -946,10 +1037,12 @@ def upload_audio():
         print("==============================")
 
         print(
+            "TYPE:",
             type(e).__name__
         )
 
         print(
+            "ERROR:",
             str(e)
         )
 
@@ -968,6 +1061,28 @@ def upload_audio():
 
         }), 500
 
+    finally:
+
+        # -------------------------------------------------
+        # DELETE TEMP FILE
+        # -------------------------------------------------
+
+        if filename:
+
+            try:
+
+                if os.path.exists(
+                    filename
+                ):
+
+                    os.remove(
+                        filename
+                    )
+
+            except Exception:
+
+                pass
+
 
 # =====================================================
 # START SERVER
@@ -976,6 +1091,7 @@ def upload_audio():
 if __name__ == "__main__":
 
     port = int(
+
         os.environ.get(
             "PORT",
             10000
@@ -1012,6 +1128,10 @@ if __name__ == "__main__":
     print("==============================")
 
     app.run(
+
         host="0.0.0.0",
-        port=port
+
+        port=port,
+
+        threaded=True
     )
