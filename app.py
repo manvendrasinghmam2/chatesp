@@ -4,984 +4,366 @@ import speech_recognition as sr
 import requests
 import re
 import threading
-from datetime import datetime
-from zoneinfo import ZoneInfo
+import time
+from collections import deque
 
 
-# =====================================================
+# =========================================================
 # APP
-# =====================================================
+# =========================================================
 
 app = Flask(__name__)
 
 
-# =====================================================
+# =========================================================
 # CONFIG
-# =====================================================
+# =========================================================
 
-AI_API_KEY = os.environ.get(
-    "AI_API_KEY"
-)
+AI_API_KEY = os.environ.get("AI_API_KEY", "").strip()
 
 AI_URL = os.environ.get(
     "AI_URL",
     "https://api.groq.com/openai/v1/chat/completions"
-)
+).strip()
 
 AI_MODEL = os.environ.get(
     "AI_MODEL",
     "llama-3.1-8b-instant"
+).strip()
+
+
+# =========================================================
+# MEMORY SETTINGS
+# =========================================================
+
+# Number of previous conversation turns.
+# 6 turns = 12 messages.
+#
+# This keeps the prompt small and fast.
+MAX_MEMORY_TURNS = 6
+
+# Delete memory after this much inactivity.
+MEMORY_TIMEOUT = 30 * 60
+
+# In-memory conversation store.
+#
+# Since your ESP32 is currently one assistant device,
+# one global memory is enough.
+conversation_memory = deque(
+    maxlen=MAX_MEMORY_TURNS * 2
 )
-
-
-# =====================================================
-# MEMORY
-# =====================================================
-
-MAX_MEMORY_MESSAGES = 16
-
-conversation_history = []
 
 memory_lock = threading.Lock()
 
-
-# =====================================================
-# MEMORY FUNCTIONS
-# =====================================================
-
-def add_memory(
-    role,
-    content
-):
-
-    if not content:
-        return
-
-    content = str(
-        content
-    ).strip()
-
-    if not content:
-        return
-
-    with memory_lock:
-
-        conversation_history.append({
-
-            "role":
-                role,
-
-            "content":
-                content
-        })
+last_memory_time = 0
 
 
-        # Keep memory compact
+# =========================================================
+# LOCK FOR AI REQUESTS
+# =========================================================
 
-        while (
-            len(conversation_history)
-            >
-            MAX_MEMORY_MESSAGES
-        ):
-
-            conversation_history.pop(
-                0
-            )
+ai_lock = threading.Lock()
 
 
-# =====================================================
-# GET MEMORY
-# =====================================================
-
-def get_memory():
-
-    with memory_lock:
-
-        return list(
-            conversation_history
-        )
-
-
-# =====================================================
-# CLEAR MEMORY
-# =====================================================
-
-def clear_memory():
-
-    with memory_lock:
-
-        conversation_history.clear()
-
-
-# =====================================================
+# =========================================================
 # HOME
-# =====================================================
+# =========================================================
 
-@app.route(
-    "/",
-    methods=["GET"]
-)
+@app.route("/", methods=["GET"])
 def home():
 
-    return (
-        "ESP32 Voice AI Server ONLINE"
-    )
+    return "ESP32 Voice Server is ONLINE!"
 
 
-# =====================================================
+# =========================================================
 # HEALTH
-# =====================================================
+# =========================================================
 
-@app.route(
-    "/health",
-    methods=["GET"]
-)
+@app.route("/health", methods=["GET"])
 def health():
 
     return jsonify({
-
-        "status":
-            "online",
-
-        "ai":
-            AI_MODEL,
-
-        "memory_messages":
-            len(
-                get_memory()
-            ),
-
-        "memory_limit":
-            MAX_MEMORY_MESSAGES,
-
-        "weather":
-            "Open-Meteo"
+        "status": "online",
+        "speech_engine": "Google Speech Recognition",
+        "ai_engine": "Groq",
+        "model": AI_MODEL,
+        "memory": "enabled",
+        "memory_turns": MAX_MEMORY_TURNS
     })
 
 
-# =====================================================
-# MEMORY
-# =====================================================
-
-@app.route(
-    "/memory",
-    methods=["GET"]
-)
-def memory():
-
-    return jsonify({
-
-        "count":
-            len(
-                get_memory()
-            ),
-
-        "messages":
-            get_memory()
-    })
-
-
-# =====================================================
-# RESET
-# =====================================================
-
-@app.route(
-    "/reset",
-    methods=["GET", "POST"]
-)
-def reset():
-
-    clear_memory()
-
-    print(
-        "Conversation memory cleared."
-    )
-
-    return jsonify({
-
-        "status":
-            "ok",
-
-        "message":
-            "Memory cleared."
-    })
-
-
-# =====================================================
+# =========================================================
 # WAKE
-# =====================================================
+# =========================================================
 
-@app.route(
-    "/wake",
-    methods=["POST", "GET"]
-)
+@app.route("/wake", methods=["POST", "GET"])
 def wake():
 
-    # NOTE:
-    # This currently accepts every wake request.
-    #
-    # Real HELLO detection can be added later.
-
     return jsonify({
-
-        "status":
-            "ok",
-
-        "wake":
-            True
+        "status": "ok",
+        "wake": True,
+        "english": "Hello",
+        "hindi": None
     })
 
 
-# =====================================================
-# CLEAN TEXT
-# =====================================================
+# =========================================================
+# TEXT CLEANING
+# =========================================================
 
-def clean_text(
-    text
-):
+def clean_text(text):
 
-    if not text:
+    if text is None:
         return ""
 
-    text = str(
-        text
-    ).strip()
+    text = str(text)
 
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
+    # Remove null characters
+    text = text.replace("\x00", "")
 
-    return text
+    # Remove excessive spaces
+    text = re.sub(r"\s+", " ", text)
+
+    return text.strip()
 
 
-# =====================================================
+# =========================================================
 # VALID QUERY
-# =====================================================
+# =========================================================
 
-def is_valid_query(
-    text
-):
+def is_valid_query(text):
+
+    text = clean_text(text)
 
     if not text:
         return False
-
-    text = str(
-        text
-    ).strip()
 
     if len(text) < 2:
         return False
 
-    bad = [
-
+    bad_values = {
         "unknown",
-
         "none",
-
         "null",
-
         "no response",
-
         "no valid query",
+        "speech not understood",
+        "could not understand",
+        "please say that again"
+    }
 
-        "speech not understood"
-    ]
-
-    if text.lower() in bad:
+    if text.lower() in bad_values:
         return False
 
     return True
 
 
-# =====================================================
-# WEATHER
-# =====================================================
+# =========================================================
+# MEMORY CLEAR
+# =========================================================
 
-WEATHER_CODES = {
+def clear_memory():
 
-    0:
-        "clear sky",
+    global last_memory_time
 
-    1:
-        "mainly clear",
+    with memory_lock:
 
-    2:
-        "partly cloudy",
+        conversation_memory.clear()
 
-    3:
-        "overcast",
-
-    45:
-        "foggy",
-
-    48:
-        "foggy",
-
-    51:
-        "light drizzle",
-
-    53:
-        "drizzle",
-
-    55:
-        "heavy drizzle",
-
-    61:
-        "light rain",
-
-    63:
-        "rain",
-
-    65:
-        "heavy rain",
-
-    71:
-        "light snow",
-
-    73:
-        "snow",
-
-    75:
-        "heavy snow",
-
-    80:
-        "rain showers",
-
-    81:
-        "rain showers",
-
-    82:
-        "heavy rain showers",
-
-    95:
-        "thunderstorm",
-
-    96:
-        "thunderstorm with hail",
-
-    99:
-        "thunderstorm with hail"
-}
+        last_memory_time = time.time()
 
 
-# =====================================================
-# GEOCODE CITY
-# =====================================================
+# =========================================================
+# MEMORY CLEANUP
+# =========================================================
 
-def geocode_city(
-    city
-):
+def cleanup_memory():
 
-    city = clean_text(
-        city
-    )
+    global last_memory_time
 
-    if not city:
-        return None
+    now = time.time()
 
-
-    try:
-
-        response = requests.get(
-
-            "https://geocoding-api.open-meteo.com/v1/search",
-
-            params={
-
-                "name":
-                    city,
-
-                "count":
-                    1,
-
-                "language":
-                    "en",
-
-                "format":
-                    "json"
-            },
-
-            timeout=10
-        )
-
+    with memory_lock:
 
         if (
-            response.status_code != 200
-        ):
-            return None
-
-
-        data =
-            response.json()
-
-
-        results =
-            data.get(
-                "results"
-            )
-
-
-        if not results:
-            return None
-
-
-        result =
-            results[0]
-
-
-        return {
-
-            "name":
-                result.get(
-                    "name",
-                    city
-                ),
-
-            "latitude":
-                result.get(
-                    "latitude"
-                ),
-
-            "longitude":
-                result.get(
-                    "longitude"
-                ),
-
-            "country":
-                result.get(
-                    "country",
-                    ""
-                )
-        }
-
-
-    except Exception as e:
-
-        print(
-            "GEOCODE ERROR:",
-            str(e)
-        )
-
-        return None
-
-
-# =====================================================
-# WEATHER FETCH
-# =====================================================
-
-def get_weather(
-    city
-):
-
-    location =
-        geocode_city(
-            city
-        )
-
-
-    if not location:
-
-        return None
-
-
-    try:
-
-        response = requests.get(
-
-            "https://api.open-meteo.com/v1/forecast",
-
-            params={
-
-                "latitude":
-                    location["latitude"],
-
-                "longitude":
-                    location["longitude"],
-
-                "current":
-                    ",".join([
-
-                        "temperature_2m",
-
-                        "relative_humidity_2m",
-
-                        "apparent_temperature",
-
-                        "precipitation",
-
-                        "weather_code",
-
-                        "wind_speed_10m"
-                    ]),
-
-                "daily":
-                    ",".join([
-
-                        "temperature_2m_max",
-
-                        "temperature_2m_min",
-
-                        "precipitation_probability_max",
-
-                        "weather_code"
-                    ]),
-
-                "forecast_days":
-                    3,
-
-                "timezone":
-                    "auto"
-            },
-
-            timeout=10
-        )
-
-
-        if (
-            response.status_code != 200
+            conversation_memory
+            and last_memory_time > 0
+            and now - last_memory_time > MEMORY_TIMEOUT
         ):
 
-            print(
-                "WEATHER HTTP:",
-                response.status_code
-            )
+            conversation_memory.clear()
 
-            return None
+        last_memory_time = now
 
 
-        data =
-            response.json()
+# =========================================================
+# ADD USER MESSAGE
+# =========================================================
 
+def add_user_memory(text):
 
-        current =
-            data.get(
-                "current",
-                {}
-            )
+    global last_memory_time
 
-
-        daily =
-            data.get(
-                "daily",
-                {}
-            )
-
-
-        code =
-            current.get(
-                "weather_code"
-            )
-
-
-        condition =
-            WEATHER_CODES.get(
-                code,
-                "unknown conditions"
-            )
-
-
-        return {
-
-            "city":
-                location["name"],
-
-            "country":
-                location["country"],
-
-            "temperature":
-                current.get(
-                    "temperature_2m"
-                ),
-
-            "feels_like":
-                current.get(
-                    "apparent_temperature"
-                ),
-
-            "humidity":
-                current.get(
-                    "relative_humidity_2m"
-                ),
-
-            "precipitation":
-                current.get(
-                    "precipitation"
-                ),
-
-            "wind":
-                current.get(
-                    "wind_speed_10m"
-                ),
-
-            "condition":
-                condition,
-
-            "today_high":
-                (
-                    daily
-                    .get(
-                        "temperature_2m_max",
-                        [None]
-                    )[0]
-                ),
-
-            "today_low":
-                (
-                    daily
-                    .get(
-                        "temperature_2m_min",
-                        [None]
-                    )[0]
-                ),
-
-            "rain_probability":
-                (
-                    daily
-                    .get(
-                        "precipitation_probability_max",
-                        [None]
-                    )[0]
-                )
-        }
-
-
-    except Exception as e:
-
-        print(
-            "WEATHER ERROR:",
-            str(e)
-        )
-
-        return None
-
-
-# =====================================================
-# WEATHER INTENT
-# =====================================================
-
-def is_weather_question(
-    text
-):
+    text = clean_text(text)
 
     if not text:
-        return False
+        return
+
+    cleanup_memory()
+
+    with memory_lock:
+
+        conversation_memory.append({
+            "role": "user",
+            "content": text
+        })
+
+        last_memory_time = time.time()
 
 
-    text =
-        text.lower()
+# =========================================================
+# ADD AI MESSAGE
+# =========================================================
 
+def add_ai_memory(text):
 
-    weather_words = [
+    global last_memory_time
 
-        "weather",
-
-        "temperature",
-
-        "forecast",
-
-        "rain",
-
-        "raining",
-
-        "बारिश",
-
-        "मौसम",
-
-        "तापमान",
-
-        "temperature",
-
-        "garmee",
-
-        "garmi",
-
-        "thand",
-
-        "cold"
-    ]
-
-
-    return any(
-        word in text
-        for word in weather_words
-    )
-
-
-# =====================================================
-# FIND CITY FROM TEXT
-# =====================================================
-
-def extract_city(
-    text
-):
+    text = clean_text(text)
 
     if not text:
-        return None
+        return
+
+    with memory_lock:
+
+        conversation_memory.append({
+            "role": "assistant",
+            "content": text
+        })
+
+        last_memory_time = time.time()
 
 
-    text =
-        clean_text(
-            text
-        )
+# =========================================================
+# GET MEMORY
+# =========================================================
+
+def get_memory():
+
+    cleanup_memory()
+
+    with memory_lock:
+
+        return list(conversation_memory)
 
 
-    # Common Indian city names
+# =========================================================
+# BEST TRANSCRIPTION
+# =========================================================
 
-    cities = [
-
-        "Noida",
-
-        "Delhi",
-
-        "New Delhi",
-
-        "Gurgaon",
-
-        "Gurugram",
-
-        "Faridabad",
-
-        "Ghaziabad",
-
-        "Mumbai",
-
-        "Pune",
-
-        "Bangalore",
-
-        "Bengaluru",
-
-        "Hyderabad",
-
-        "Chennai",
-
-        "Kolkata",
-
-        "Jaipur",
-
-        "Lucknow",
-
-        "Agra",
-
-        "Chandigarh",
-
-        "Ahmedabad"
-    ]
-
-
-    lower =
-        text.lower()
-
-
-    for city in cities:
-
-        if city.lower() in lower:
-
-            return city
-
-
-    # Remove common words.
-    #
-    # This allows:
-    #
-    # "Noida City"
-    # "weather in Noida"
-    # "Noida ka weather"
-
-    cleaned =
-        re.sub(
-
-            r"\b(city|ka|ki|ke|mein|me|weather|today|"
-            r"tomorrow|aaj|kal|batao|bataye|please)\b",
-
-            " ",
-
-            lower
-        )
-
-
-    cleaned =
-        re.sub(
-            r"\s+",
-            " ",
-            cleaned
-        ).strip()
-
-
-    if (
-        len(cleaned) >= 2
-    ):
-
-        return cleaned
-
-
-    return None
-
-
-# =====================================================
-# WEATHER CONTEXT
-# =====================================================
-
-def find_weather_city(
-    current_text
+def choose_transcription(
+    hindi_text,
+    english_text
 ):
 
-    # First try current message.
+    hindi_text = clean_text(hindi_text)
+    english_text = clean_text(english_text)
 
-    city =
-        extract_city(
-            current_text
-        )
+    hindi_valid = is_valid_query(hindi_text)
+    english_valid = is_valid_query(english_text)
 
+    # -----------------------------------------------------
+    # Only English
+    # -----------------------------------------------------
 
-    if city:
-        return city
+    if english_valid and not hindi_valid:
 
-
-    # Then inspect recent memory.
-
-    history =
-        get_memory()
+        return english_text
 
 
-    for item in reversed(
-        history
-    ):
+    # -----------------------------------------------------
+    # Only Hindi
+    # -----------------------------------------------------
 
-        content =
-            item.get(
-                "content",
-                ""
-            )
+    if hindi_valid and not english_valid:
+
+        return hindi_text
 
 
-        city =
-            extract_city(
-                content
-            )
+    # -----------------------------------------------------
+    # Both available
+    #
+    # For AI we send BOTH.
+    #
+    # For displayed transcription, choose English if
+    # available because Google often gives better English
+    # text for English/Hinglish.
+    # -----------------------------------------------------
+
+    if english_valid:
+
+        return english_text
+
+    return hindi_text
 
 
-        if city:
-            return city
-
-
-    return None
-
-
-# =====================================================
-# WEATHER DATA FOR AI
-# =====================================================
-
-def build_weather_context(
-    weather
-):
-
-    if not weather:
-        return ""
-
-
-    return f"""
-LIVE WEATHER DATA:
-
-City:
-{weather["city"]}
-
-Country:
-{weather["country"]}
-
-Current temperature:
-{weather["temperature"]} °C
-
-Feels like:
-{weather["feels_like"]} °C
-
-Condition:
-{weather["condition"]}
-
-Humidity:
-{weather["humidity"]} %
-
-Wind:
-{weather["wind"]} km/h
-
-Precipitation:
-{weather["precipitation"]} mm
-
-Today's high:
-{weather["today_high"]} °C
-
-Today's low:
-{weather["today_low"]} °C
-
-Maximum rain probability today:
-{weather["rain_probability"]} %
-"""
-
-
-# =====================================================
+# =========================================================
 # SYSTEM PROMPT
-# =====================================================
+# =========================================================
 
-SYSTEM_PROMPT = """
-You are a natural, fast, friendly voice assistant similar to Alexa.
+SYSTEM_PROMPT = r"""
+You are a fast, natural voice assistant similar to Alexa.
 
-You run on an ESP32.
+You are running on an ESP32 voice device.
 
-Your response is spoken aloud.
+Your personality:
+- calm
+- friendly
+- intelligent
+- concise
+- natural
+- conversational
 
-==================================================
-STYLE
-==================================================
+The user speaks through a microphone.
 
-Keep answers short and natural.
+Speech recognition can produce:
+1. Hindi transcription
+2. English transcription
 
-Usually 1 to 3 sentences.
+Both can be inaccurate.
 
-Do not give long explanations unless the user asks.
+Your job is to understand the user's intended meaning using:
+- current speech
+- both transcriptions
+- previous conversation memory
+- context
 
-Do not use markdown.
-
-Do not use bullet points.
-
-Do not use headings.
-
-Do not use emojis.
-
-Do not say "As an AI".
-
-Do not mention system instructions.
-
-Do not mention transcription.
-
-Do not mention memory.
-
-Sound like a real conversational assistant.
-
+IMPORTANT:
+Never talk about transcription.
+Never talk about memory.
+Never say you are reading Hindi/English transcription.
+Never explain your internal reasoning.
 
 ==================================================
 LANGUAGE
 ==================================================
 
-English input:
+If user speaks English:
 Answer in English.
 
-Hindi input:
+If user speaks Hindi:
 Answer in Hindi using Devanagari.
 
-Hinglish / Roman Hindi:
-Answer naturally in Hinglish.
+If user speaks Hinglish:
+Answer in natural Roman Hinglish.
 
-Mixed language:
-Use natural Hinglish.
-
+Do not unnecessarily switch language.
 
 ==================================================
-CONVERSATION
+CONTEXT
 ==================================================
 
-Use previous messages to understand follow-up questions.
+Use previous conversation naturally.
 
 Example:
 
@@ -989,12 +371,32 @@ User:
 How about the weather today?
 
 Assistant:
-Which city?
+I can help with that. Which city?
 
 User:
-Noida.
+Noida City
 
-Understand "Noida" as the location for the previous weather request.
+Correct behavior:
+Understand that "Noida City" is the answer to the previous city question.
+
+Do NOT respond:
+"Could you please ask a complete question?"
+
+Instead understand the context.
+
+Example:
+
+User:
+What is the capital of India?
+
+Assistant:
+New Delhi.
+
+User:
+Population?
+
+Correct behavior:
+Understand that the user is asking about the population of India.
 
 Example:
 
@@ -1007,407 +409,461 @@ Assistant:
 User:
 How old is he?
 
-Understand "he" as Elon Musk.
+Correct behavior:
+Understand "he" refers to Elon Musk.
 
-Example:
+==================================================
+SHORT FOLLOW-UP QUESTIONS
+==================================================
+
+Users may say incomplete phrases such as:
+
+"about it"
+"population"
+"where"
+"today"
+"Noida"
+"Google"
+"iske baare mein batao"
+"इसके बारे में बताओ"
+
+Use previous conversation to determine what they mean.
+
+Do NOT treat a short follow-up as an error.
+
+==================================================
+WEATHER
+==================================================
+
+You do NOT have guaranteed live weather data.
+
+Never invent current weather.
+
+If the user asks for current weather and no live weather data
+has been supplied, say briefly:
+
+"I don't have live weather data right now."
+
+If a city is supplied after a weather question, remember the city
+for the conversation.
+
+Do not pretend that you fetched Google weather.
+
+==================================================
+GENERAL QUESTIONS
+==================================================
+
+Answer simple questions directly.
+
+Do not over-explain.
+
+Voice answers should normally be:
+1 to 3 sentences.
+
+==================================================
+VOICE STYLE
+==================================================
+
+Speak naturally.
+
+Do not use:
+- markdown
+- bullet points
+- headings
+- emojis
+- code
+- long explanations
+- unnecessary greetings
+- "As an AI"
+- "According to the transcription"
+
+Do not repeat the user's question.
+
+Do not say "Sure" unless it sounds natural.
+
+==================================================
+IMPORTANT MEMORY RULE
+==================================================
+
+Previous messages are conversation context.
+
+Use them when the current user message is incomplete.
+
+Do not blindly repeat old answers.
+
+Answer the CURRENT question.
+
+==================================================
+EMPTY ANSWER
+==================================================
+
+Always produce a useful answer.
+
+Never return an empty response.
+
+If the question is genuinely unclear, ask one short clarification.
+
+==================================================
+EXAMPLES
+==================================================
 
 User:
-Tell me about Delhi.
+How are you?
+
+Answer:
+I'm doing well. How can I help?
+
+User:
+Tum kaise ho?
+
+Answer:
+Main bilkul theek hoon. Aap kaise hain?
+
+User:
+Noida kahan hai?
+
+Answer:
+Noida Uttar Pradesh mein hai aur Delhi NCR ka hissa hai.
+
+User:
+भारत की राजधानी क्या है?
+
+Answer:
+भारत की राजधानी नई दिल्ली है।
+
+User:
+How about the weather today?
+
+Answer:
+Which city should I check?
+
+User:
+Noida City
+
+Answer:
+I don't have live weather data right now.
+
+User:
+What is the capital of India?
 
 Assistant:
-...
+New Delhi.
 
 User:
-What about Gurgaon?
+Population?
 
-Understand that the user is continuing the location discussion.
-
-
-==================================================
-LIVE WEATHER
-==================================================
-
-If LIVE WEATHER DATA is supplied below, use it.
-
-Never invent current weather values.
-
-If the user asks about current weather and live weather data is supplied,
-give the answer using that data.
-
-Keep weather answers concise.
-
-Example:
-
-"Right now in Noida, it's 31 degrees and partly cloudy, with humidity around 70 percent."
-
+Answer:
+India has a population of over 1.4 billion people.
 
 ==================================================
-SHORT FOLLOW-UPS
+FINAL RULE
 ==================================================
 
-If the user says only:
+Understand intent first.
 
-"Noida"
-
-"Tomorrow"
-
-"Gurgaon"
-
-"Yes"
-
-"And tomorrow?"
-
-"aur Gurgaon ka?"
-
-use the conversation context to understand what they mean.
-
-Do not treat these as unrelated questions.
-
-
-==================================================
-IMPORTANT
-==================================================
-
-Answer the user's actual intent.
-
-Do not explain your reasoning.
-
-Do not ask unnecessary questions.
+Then give the shortest useful natural answer.
 """
 
 
-# =====================================================
-# BUILD USER CONTENT
-# =====================================================
+# =========================================================
+# BUILD USER MESSAGE
+# =========================================================
 
 def build_user_content(
     hindi_text,
-    english_text,
-    weather_context
+    english_text
 ):
 
-    hindi_text =
-        clean_text(
-            hindi_text
-        )
+    hindi_text = clean_text(hindi_text)
+    english_text = clean_text(english_text)
 
-    english_text =
-        clean_text(
-            english_text
-        )
+    if not hindi_text:
+        hindi_text = "No Hindi result"
 
+    if not english_text:
+        english_text = "No English result"
 
     return f"""
 Current user speech:
 
 Hindi recognition:
-{hindi_text if hindi_text else "No result"}
+{hindi_text}
 
 English recognition:
-{english_text if english_text else "No result"}
+{english_text}
 
-{weather_context}
+Understand the user's intended meaning using the conversation
+history and answer naturally.
 
-Understand the intended meaning using the current speech
-and previous conversation.
-
-Give a natural voice-assistant response.
+If this is a short follow-up, connect it to the previous turn.
 """
 
 
-# =====================================================
-# AI
-# =====================================================
+# =========================================================
+# REMOVE BAD AI PREFIX
+# =========================================================
 
-def get_ai_reply(
+def clean_ai_reply(reply):
+
+    if reply is None:
+        return ""
+
+    reply = str(reply)
+
+    reply = reply.replace("```", "")
+
+    reply = re.sub(
+        r"^\s*(AI|Assistant|Answer|Response)\s*:\s*",
+        "",
+        reply,
+        flags=re.IGNORECASE
+    )
+
+    reply = re.sub(
+        r"\s+",
+        " ",
+        reply
+    )
+
+    return reply.strip()
+
+
+# =========================================================
+# GROQ REQUEST
+# =========================================================
+
+def call_groq(
     hindi_text,
-    english_text,
-    weather_context=""
+    english_text
 ):
 
     if not AI_API_KEY:
 
-        return (
-            "AI service is not configured."
-        )
+        print("ERROR: AI_API_KEY is missing")
+
+        return ""
 
 
-    user_content =
-        build_user_content(
+    # -----------------------------------------------------
+    # Memory
+    # -----------------------------------------------------
 
-            hindi_text,
-
-            english_text,
-
-            weather_context
-        )
+    memory = get_memory()
 
 
-    history =
-        get_memory()
+    # -----------------------------------------------------
+    # Current user
+    # -----------------------------------------------------
 
+    current_user = build_user_content(
+        hindi_text,
+        english_text
+    )
+
+
+    # -----------------------------------------------------
+    # Messages
+    # -----------------------------------------------------
 
     messages = [
 
         {
-
-            "role":
-                "system",
-
-            "content":
-                SYSTEM_PROMPT
+            "role": "system",
+            "content": SYSTEM_PROMPT
         }
 
     ]
 
 
-    # Add compact memory.
+    # -----------------------------------------------------
+    # Add memory
+    # -----------------------------------------------------
 
-    messages.extend(
-        history
-    )
+    for item in memory:
+
+        role = item.get("role")
+        content = clean_text(
+            item.get("content", "")
+        )
+
+        if (
+            role in ("user", "assistant")
+            and content
+        ):
+
+            messages.append({
+                "role": role,
+                "content": content
+            })
 
 
-    # Current message.
+    # -----------------------------------------------------
+    # Current user message
+    # -----------------------------------------------------
 
     messages.append({
-
-        "role":
-            "user",
-
-        "content":
-            user_content
+        "role": "user",
+        "content": current_user
     })
 
 
+    # -----------------------------------------------------
+    # Payload
+    # -----------------------------------------------------
+
     payload = {
 
-        "model":
-            AI_MODEL,
+        "model": AI_MODEL,
 
-        "messages":
-            messages,
+        "messages": messages,
 
-        "temperature":
-            0.2,
+        "temperature": 0.2,
 
-        "max_completion_tokens":
-            180,
+        "max_completion_tokens": 180,
 
-        "stream":
-            False
+        "stream": False
     }
 
 
     headers = {
 
         "Authorization":
-            "Bearer " +
-            AI_API_KEY,
+            "Bearer " + AI_API_KEY,
 
         "Content-Type":
-            "application/json"
+            "application/json",
+
+        "User-Agent":
+            "ESP32-Voice-Assistant/1.0"
     }
 
 
-    print()
-    print("==============================")
-    print("AI REQUEST")
-    print("==============================")
-
-    print(
-        "MODEL:",
-        AI_MODEL
-    )
-
-    print(
-        "MEMORY:",
-        len(history)
-    )
-
-    print("==============================")
-
+    # -----------------------------------------------------
+    # Request
+    # -----------------------------------------------------
 
     try:
 
-        response =
-            requests.post(
+        print()
+        print("==============================")
+        print("GROQ REQUEST")
+        print("==============================")
 
-                AI_URL,
+        print("MODEL:", AI_MODEL)
 
-                headers=headers,
+        print("MEMORY MESSAGES:", len(memory))
 
-                json=payload,
-
-                timeout=30
-            )
-
-
-        print(
-            "AI HTTP:",
-            response.status_code
-        )
+        print("==============================")
 
 
-        if (
-            response.status_code != 200
-        ):
+        response = requests.post(
 
-            print()
-            print(
-                "AI ERROR BODY:"
-            )
+            AI_URL,
 
-            print(
-                response.text[:3000]
-            )
+            headers=headers,
 
-            print(
-                "=============================="
-            )
+            json=payload,
 
-
-            return (
-                "AI service error "
-                +
-                str(
-                    response.status_code
-                )
-            )
-
-
-        data =
-            response.json()
-
-
-        choices =
-            data.get(
-                "choices"
-            )
-
-
-        if not choices:
-
-            print(
-                "No choices returned:"
-            )
-
-            print(
-                data
-            )
-
-            return (
-                "AI returned no answer."
-            )
-
-
-        message =
-            choices[0].get(
-                "message",
-                {}
-            )
-
-
-        reply =
-            message.get(
-                "content",
-                ""
-            )
-
-
-        if reply is None:
-
-            reply = ""
-
-
-        reply =
-            str(
-                reply
-            ).strip()
-
-
-        # ---------------------------------------------
-        # Remove accidental formatting
-        # ---------------------------------------------
-
-        reply =
-            reply.replace(
-                "```",
-                ""
-            ).strip()
-
-
-        for prefix in [
-
-            "AI:",
-
-            "Answer:",
-
-            "Response:"
-        ]:
-
-            if reply.startswith(
-                prefix
-            ):
-
-                reply =
-                    reply[
-                        len(prefix):
-                    ].strip()
-
-
-        if not reply:
-
-            print(
-                "EMPTY AI RESPONSE:"
-            )
-
-            print(
-                data
-            )
-
-            return (
-                "I couldn't generate a response."
-            )
-
-
-        # ---------------------------------------------
-        # Save compact conversation
-        # ---------------------------------------------
-
-        # Save the human-readable best transcription,
-        # not the entire recognition prompt.
-
-        transcription =
-            choose_transcription(
-
-                hindi_text,
-
-                english_text
-            )
-
-
-        add_memory(
-            "user",
-            transcription
-        )
-
-
-        add_memory(
-            "assistant",
-            reply
+            timeout=35
         )
 
 
         print()
+        print("==============================")
+        print("GROQ RESPONSE")
+        print("==============================")
+
         print(
-            "AI:",
+            "HTTP:",
+            response.status_code
+        )
+
+        print("==============================")
+
+
+        # -------------------------------------------------
+        # API error
+        # -------------------------------------------------
+
+        if response.status_code != 200:
+
+            print("GROQ ERROR:")
+            print(response.text[:3000])
+
+            return ""
+
+
+        # -------------------------------------------------
+        # JSON
+        # -------------------------------------------------
+
+        try:
+
+            data = response.json()
+
+        except Exception as e:
+
+            print("JSON ERROR:", str(e))
+
+            return ""
+
+
+        # -------------------------------------------------
+        # Choices
+        # -------------------------------------------------
+
+        choices = data.get(
+            "choices",
+            []
+        )
+
+        if not choices:
+
+            print("NO CHOICES")
+
+            print(data)
+
+            return ""
+
+
+        # -------------------------------------------------
+        # Message
+        # -------------------------------------------------
+
+        message = choices[0].get(
+            "message",
+            {}
+        )
+
+
+        reply = message.get(
+            "content",
+            ""
+        )
+
+
+        reply = clean_ai_reply(
             reply
         )
 
-        print(
-            "=============================="
-        )
+
+        if not reply:
+
+            print("EMPTY AI CONTENT")
+
+            print(data)
+
+            return ""
+
+
+        print()
+        print("==============================")
+        print("AI REPLY")
+        print("==============================")
+
+        print(reply)
+
+        print("==============================")
 
 
         return reply
@@ -1415,82 +871,127 @@ def get_ai_reply(
 
     except requests.exceptions.Timeout:
 
-        print(
-            "AI TIMEOUT"
-        )
+        print("GROQ TIMEOUT")
 
-        return (
-            "AI service timed out."
-        )
+        return ""
 
 
     except requests.exceptions.ConnectionError as e:
 
         print(
-            "AI CONNECTION ERROR:",
+            "GROQ CONNECTION ERROR:",
             str(e)
         )
 
-        return (
-            "AI service connection failed."
-        )
+        return ""
 
 
     except Exception as e:
 
         print(
-            "AI EXCEPTION:",
+            "GROQ EXCEPTION:",
             type(e).__name__,
             str(e)
         )
 
-        return (
-            "AI service error."
-        )
+        return ""
 
 
-# =====================================================
-# CHOOSE TRANSCRIPTION
-# =====================================================
+# =========================================================
+# AI REPLY WITH RETRY
+# =========================================================
 
-def choose_transcription(
+def get_ai_reply(
     hindi_text,
     english_text
 ):
 
-    hindi_text =
-        clean_text(
-            hindi_text
-        )
+    # -----------------------------------------------------
+    # Only one AI request at a time.
+    # -----------------------------------------------------
 
-    english_text =
-        clean_text(
+    with ai_lock:
+
+        # First attempt
+        reply = call_groq(
+            hindi_text,
             english_text
         )
 
+        if reply:
 
-    if english_text:
-
-        # If English result is extremely short
-        # but Hindi is meaningful, use Hindi.
-
-        if (
-            len(english_text) <= 2
-            and
-            len(hindi_text) > 2
-        ):
-            return hindi_text
+            return reply
 
 
-        return english_text
+        # -------------------------------------------------
+        # Retry with a smaller context.
+        #
+        # This helps if the first request had an issue.
+        # -------------------------------------------------
+
+        print()
+        print("AI RETRY...")
+        print()
 
 
-    return hindi_text
+        time.sleep(0.25)
 
 
-# =====================================================
-# AUDIO UPLOAD
-# =====================================================
+        reply = call_groq(
+            hindi_text,
+            english_text
+        )
+
+        if reply:
+
+            return reply
+
+
+        return (
+            "I couldn't get a response right now."
+        )
+
+
+# =========================================================
+# SAVE SUCCESSFUL CONVERSATION
+# =========================================================
+
+def save_conversation(
+    user_text,
+    ai_reply
+):
+
+    user_text = clean_text(
+        user_text
+    )
+
+    ai_reply = clean_text(
+        ai_reply
+    )
+
+    if not user_text:
+        return
+
+    # Don't save server error messages.
+    if ai_reply in (
+        "I couldn't get a response right now.",
+        "AI response nahi mil saka."
+    ):
+        return
+
+
+    add_user_memory(
+        user_text
+    )
+
+    add_ai_memory(
+        ai_reply
+    )
+
+
+# =========================================================
+# AUDIO ENDPOINT
+# =========================================================
 
 @app.route(
     "/uploadAudio",
@@ -1500,22 +1001,25 @@ def upload_audio():
 
     try:
 
-        audio_data =
-            request.get_data()
+        # -------------------------------------------------
+        # AUDIO
+        # -------------------------------------------------
+
+        audio_data = request.get_data()
 
 
         if not audio_data:
 
             return jsonify({
 
-                "status":
-                    "error",
+                "status": "error",
 
                 "message":
                     "No audio received",
 
                 "ai_reply":
-                    "I didn't hear anything."
+                    "Please ask your question again."
+
             }), 400
 
 
@@ -1525,13 +1029,18 @@ def upload_audio():
         print("==============================")
 
         print(
-            "BYTES:",
+            "Audio bytes:",
             len(audio_data)
         )
 
+        print("==============================")
 
-        filename =
-            "/tmp/audio.wav"
+
+        # -------------------------------------------------
+        # Save WAV
+        # -------------------------------------------------
+
+        filename = "/tmp/esp32_audio.wav"
 
 
         with open(
@@ -1544,49 +1053,70 @@ def upload_audio():
             )
 
 
-        recognizer =
-            sr.Recognizer()
+        # -------------------------------------------------
+        # Speech recognizer
+        # -------------------------------------------------
+
+        recognizer = sr.Recognizer()
+
+
+        # Better handling of ESP32 audio.
+        recognizer.energy_threshold = 250
+        recognizer.dynamic_energy_threshold = True
+        recognizer.pause_threshold = 0.8
+        recognizer.phrase_threshold = 0.2
+        recognizer.non_speaking_duration = 0.4
 
 
         with sr.AudioFile(
             filename
         ) as source:
 
-            audio =
-                recognizer.record(
-                    source
-                )
+            audio = recognizer.record(
+                source
+            )
 
 
-        hindi_text = None
-
-        english_text = None
+        hindi_text = ""
+        english_text = ""
 
 
         # =================================================
         # HINDI
         # =================================================
 
+        print()
+        print("==============================")
+        print("HINDI RECOGNITION")
+        print("==============================")
+
+
         try:
 
-            hindi_text =
-                recognizer.recognize_google(
+            hindi_text = recognizer.recognize_google(
 
-                    audio,
+                audio,
 
-                    language="hi-IN"
-                )
+                language="hi-IN"
+            )
 
+            hindi_text = clean_text(
+                hindi_text
+            )
 
-            hindi_text =
-                clean_text(
-                    hindi_text
-                )
+            print(
+                "Hindi:",
+                hindi_text
+            )
 
 
         except sr.UnknownValueError:
 
-            hindi_text = None
+            print(
+                "Hindi: not understood"
+            )
+
+            hindi_text = ""
 
 
         except sr.RequestError as e:
@@ -1596,31 +1126,45 @@ def upload_audio():
                 str(e)
             )
 
+            hindi_text = ""
+
 
         # =================================================
         # ENGLISH
         # =================================================
 
+        print()
+        print("==============================")
+        print("ENGLISH RECOGNITION")
+        print("==============================")
+
+
         try:
 
-            english_text =
-                recognizer.recognize_google(
+            english_text = recognizer.recognize_google(
 
-                    audio,
+                audio,
 
-                    language="en-IN"
-                )
+                language="en-IN"
+            )
 
+            english_text = clean_text(
+                english_text
+            )
 
-            english_text =
-                clean_text(
-                    english_text
-                )
+            print(
+                "English:",
+                english_text
+            )
 
 
         except sr.UnknownValueError:
 
-            english_text = None
+            print(
+                "English: not understood"
+            )
+
+            english_text = ""
 
 
         except sr.RequestError as e:
@@ -1630,25 +1174,7 @@ def upload_audio():
                 str(e)
             )
 
-
-        print()
-        print("==============================")
-        print("TRANSCRIPTION")
-        print("==============================")
-
-        print(
-            "Hindi:",
-            hindi_text
-        )
-
-        print(
-            "English:",
-            english_text
-        )
-
-        print(
-            "=============================="
-        )
+            english_text = ""
 
 
         # =================================================
@@ -1656,14 +1182,16 @@ def upload_audio():
         # =================================================
 
         if (
-            not is_valid_query(
-                hindi_text
-            )
+            not is_valid_query(hindi_text)
             and
-            not is_valid_query(
-                english_text
-            )
+            not is_valid_query(english_text)
         ):
+
+            print()
+            print(
+                "SPEECH NOT UNDERSTOOD"
+            )
+
 
             return jsonify({
 
@@ -1683,113 +1211,51 @@ def upload_audio():
                     english_text,
 
                 "ai_reply":
-                    "Please say that again."
-            }), 400
+                    "Please ask your question again."
 
-
-        transcription =
-            choose_transcription(
-
-                hindi_text,
-
-                english_text
-            )
+            }), 200
 
 
         # =================================================
-        # WEATHER
+        # TRANSCRIPTION
         # =================================================
 
-        weather_context = ""
+        transcription = choose_transcription(
 
+            hindi_text,
 
-        combined_text = (
-
-            (english_text or "")
-            +
-            " "
-            +
-            (hindi_text or "")
+            english_text
         )
-
-
-        if is_weather_question(
-            combined_text
-        ):
-
-            city =
-                find_weather_city(
-                    combined_text
-                )
-
-
-            if city:
-
-                print()
-                print(
-                    "WEATHER CITY:",
-                    city
-                )
-
-
-                weather =
-                    get_weather(
-                        city
-                    )
-
-
-                if weather:
-
-                    weather_context =
-                        build_weather_context(
-                            weather
-                        )
-
-
-                    print(
-                        "WEATHER:",
-                        weather
-                    )
-
-
-                else:
-
-                    weather_context = """
-No live weather data was found for the requested location.
-Do not invent weather values.
-"""
-
-
-            else:
-
-                # No city yet.
-                #
-                # Let AI ask for city.
-
-                weather_context = """
-The user is asking about weather,
-but no clear city/location was provided.
-Ask which city they mean.
-"""
 
 
         # =================================================
         # AI
         # =================================================
 
-        ai_reply =
-            get_ai_reply(
+        ai_reply = get_ai_reply(
 
-                hindi_text,
+            hindi_text,
 
-                english_text,
+            english_text
+        )
 
-                weather_context
+
+        # =================================================
+        # SAVE MEMORY
+        # =================================================
+
+        if ai_reply:
+
+            save_conversation(
+
+                transcription,
+
+                ai_reply
             )
 
 
         # =================================================
-        # RESPONSE
+        # FINAL
         # =================================================
 
         response_data = {
@@ -1807,33 +1273,36 @@ Ask which city they mean.
                 english_text,
 
             "ai_reply":
-                ai_reply,
-
-            "memory_messages":
-                len(
-                    get_memory()
-                )
+                ai_reply
         }
 
 
         print()
         print("==============================")
-        print("FINAL")
+        print("FINAL RESPONSE")
         print("==============================")
 
         print(
-            response_data
+            "USER:",
+            transcription
         )
 
         print(
-            "=============================="
+            "AI:",
+            ai_reply
         )
+
+        print("==============================")
 
 
         return jsonify(
             response_data
         )
 
+
+    # =====================================================
+    # SERVER ERROR
+    # =====================================================
 
     except Exception as e:
 
@@ -1843,16 +1312,16 @@ Ask which city they mean.
         print("==============================")
 
         print(
+            "TYPE:",
             type(e).__name__
         )
 
         print(
+            "ERROR:",
             str(e)
         )
 
-        print(
-            "=============================="
-        )
+        print("==============================")
 
 
         return jsonify({
@@ -1861,89 +1330,195 @@ Ask which city they mean.
                 "error",
 
             "message":
-                str(e),
+                "Server error",
 
             "ai_reply":
-                "Server error."
+                "I couldn't process that right now."
+
         }), 500
 
 
-# =====================================================
-# TEST WEATHER
-# =====================================================
+# =========================================================
+# TEXT TEST ENDPOINT
+#
+# Isse ESP32 ke bina memory test kar sakte ho.
+# =========================================================
 
 @app.route(
-    "/weather",
+    "/chat",
+    methods=["POST"]
+)
+def chat():
+
+    try:
+
+        data = request.get_json(
+            silent=True
+        ) or {}
+
+
+        text = clean_text(
+            data.get("text", "")
+        )
+
+
+        if not text:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "Text is required"
+
+            }), 400
+
+
+        # Text ko English slot mein rakhte hain.
+        # AI dono context samajh sakta hai.
+
+        ai_reply = get_ai_reply(
+
+            "",
+
+            text
+        )
+
+
+        save_conversation(
+
+            text,
+
+            ai_reply
+        )
+
+
+        return jsonify({
+
+            "status":
+                "ok",
+
+            "transcription":
+                text,
+
+            "ai_reply":
+                ai_reply
+
+        })
+
+
+    except Exception as e:
+
+        return jsonify({
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+
+        }), 500
+
+
+# =========================================================
+# MEMORY VIEW
+# =========================================================
+
+@app.route(
+    "/memory",
     methods=["GET"]
 )
-def weather_test():
+def memory_view():
 
-    city =
-        request.args.get(
-            "city",
-            ""
-        )
+    return jsonify({
 
+        "status":
+            "ok",
 
-    if not city:
+        "messages":
+            get_memory()
 
-        return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                "Use /weather?city=Noida"
-        }), 400
+    })
 
 
-    weather =
-        get_weather(
-            city
-        )
+# =========================================================
+# CLEAR MEMORY
+# =========================================================
+
+@app.route(
+    "/memory/clear",
+    methods=["POST", "GET"]
+)
+def memory_clear():
+
+    clear_memory()
+
+    return jsonify({
+
+        "status":
+            "ok",
+
+        "message":
+            "Memory cleared"
+
+    })
 
 
-    if not weather:
+# =========================================================
+# TEST
+# =========================================================
 
-        return jsonify({
+@app.route(
+    "/test",
+    methods=["POST"]
+)
+def test():
 
-            "status":
-                "error",
-
-            "message":
-                "Weather not found."
-        }), 404
-
-
-    return jsonify(
-        weather
+    data = request.get_json(
+        silent=True
     )
 
 
-# =====================================================
+    return jsonify({
+
+        "status":
+            "ok",
+
+        "received":
+            data
+
+    })
+
+
+# =========================================================
 # START
-# =====================================================
+# =========================================================
 
 if __name__ == "__main__":
 
-    port =
-        int(
+    port = int(
 
-            os.environ.get(
-                "PORT",
-                10000
-            )
+        os.environ.get(
+            "PORT",
+            "10000"
         )
+    )
 
 
     print()
     print("==============================")
-    print("ESP32 ALEXA STYLE AI SERVER")
+    print("ESP32 VOICE AI SERVER")
     print("==============================")
 
     print(
         "PORT:",
         port
+    )
+
+    print(
+        "AI URL:",
+        AI_URL
     )
 
     print(
@@ -1960,22 +1535,22 @@ if __name__ == "__main__":
 
     print(
         "MEMORY:",
-        MAX_MEMORY_MESSAGES
+        "ENABLED"
     )
 
     print(
-        "WEATHER:",
-        "OPEN-METEO"
+        "MEMORY TURNS:",
+        MAX_MEMORY_TURNS
     )
 
-    print(
-        "=============================="
-    )
+    print("==============================")
 
 
     app.run(
 
         host="0.0.0.0",
 
-        port=port
+        port=port,
+
+        threaded=True
     )
