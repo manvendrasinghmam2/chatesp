@@ -1,6 +1,6 @@
 Flask
 gunicorn
-groq
 SpeechRecognition
-requests
 gTTS
+groq
+requests
