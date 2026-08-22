@@ -1,11 +1,14 @@
 from flask import Flask, request, jsonify, send_file
+
 import os
-import speech_recognition as sr
 import re
 import tempfile
 import time
 
+import speech_recognition as sr
+
 from gtts import gTTS
+
 from groq import Groq
 
 
@@ -20,7 +23,9 @@ app = Flask(__name__)
 # CONFIG
 # ============================================================
 
-AI_API_KEY = os.environ.get("AI_API_KEY")
+AI_API_KEY = os.environ.get(
+    "AI_API_KEY"
+)
 
 AI_MODEL = os.environ.get(
     "AI_MODEL",
@@ -29,18 +34,31 @@ AI_MODEL = os.environ.get(
 
 
 # ============================================================
+# UPLOAD LIMIT
+# ============================================================
+
+# 1 MB is more than enough for the current ~96 KB WAV.
+app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024
+
+
+# ============================================================
 # GROQ
 # ============================================================
 
 groq_client = None
 
+
 if AI_API_KEY:
+
     try:
+
         groq_client = Groq(
             api_key=AI_API_KEY
         )
 
-        print("Groq client initialized")
+        print(
+            "Groq client initialized"
+        )
 
     except Exception as e:
 
@@ -60,22 +78,31 @@ else:
 # HOME
 # ============================================================
 
-@app.route("/", methods=["GET"])
+@app.route(
+    "/",
+    methods=["GET"]
+)
 def home():
 
-    return "ESP32 Voice Server is ONLINE!"
+    return (
+        "ESP32 Voice Server is ONLINE!"
+    )
 
 
 # ============================================================
 # HEALTH
 # ============================================================
 
-@app.route("/health", methods=["GET"])
+@app.route(
+    "/health",
+    methods=["GET"]
+)
 def health():
 
     return jsonify({
 
-        "status": "online",
+        "status":
+            "online",
 
         "speech_engine":
             "Google Speech Recognition",
@@ -132,9 +159,12 @@ def wake():
 def clean_text(text):
 
     if not text:
+
         return ""
 
-    text = str(text).strip()
+    text = str(
+        text
+    ).strip()
 
     text = re.sub(
         r"\s+",
@@ -152,11 +182,15 @@ def clean_text(text):
 def is_valid_query(text):
 
     if not text:
+
         return False
 
-    text = str(text).strip()
+    text = str(
+        text
+    ).strip()
 
     if len(text) < 2:
+
         return False
 
     bad_values = {
@@ -171,6 +205,7 @@ def is_valid_query(text):
     }
 
     if text.lower() in bad_values:
+
         return False
 
     return True
@@ -183,6 +218,7 @@ def is_valid_query(text):
 def contains_hindi_script(text):
 
     if not text:
+
         return False
 
     for char in str(text):
@@ -214,32 +250,42 @@ def detect_reply_language(
     # Devanagari
     # --------------------------------------------------------
 
-    if contains_hindi_script(reply):
+    if contains_hindi_script(
+        reply
+    ):
 
         return "hi"
 
 
     # --------------------------------------------------------
-    # Only English recognition
+    # Only English
     # --------------------------------------------------------
 
     if (
-        is_valid_query(english_text)
+        is_valid_query(
+            english_text
+        )
         and
-        not is_valid_query(hindi_text)
+        not is_valid_query(
+            hindi_text
+        )
     ):
 
         return "en"
 
 
     # --------------------------------------------------------
-    # Only Hindi recognition
+    # Only Hindi
     # --------------------------------------------------------
 
     if (
-        is_valid_query(hindi_text)
+        is_valid_query(
+            hindi_text
+        )
         and
-        not is_valid_query(english_text)
+        not is_valid_query(
+            english_text
+        )
     ):
 
         return "hi"
@@ -284,7 +330,6 @@ def detect_reply_language(
 
     ]
 
-
     lower = reply.lower()
 
     matches = 0
@@ -300,17 +345,15 @@ def detect_reply_language(
 
             matches += 1
 
-
     if matches >= 2:
 
         return "hi"
-
 
     return "en"
 
 
 # ============================================================
-# AI RESPONSE
+# AI
 # ============================================================
 
 def get_ai_reply(
@@ -458,7 +501,9 @@ Answer naturally in the user's intended language.
             )
 
 
-        result = clean_text(result)
+        result = clean_text(
+            result
+        )
 
 
         result = result.replace(
@@ -468,12 +513,16 @@ Answer naturally in the user's intended language.
 
 
         for prefix in [
+
             "AI:",
             "Answer:",
             "Response:"
+
         ]:
 
-            if result.startswith(prefix):
+            if result.startswith(
+                prefix
+            ):
 
                 result = result[
                     len(prefix):
@@ -516,7 +565,9 @@ def tts():
     )
 
 
-    text = clean_text(text)
+    text = clean_text(
+        text
+    )
 
 
     if not text:
@@ -531,10 +582,6 @@ def tts():
 
         }), 400
 
-
-    # --------------------------------------------------------
-    # Limit
-    # --------------------------------------------------------
 
     if len(text) > 400:
 
@@ -558,7 +605,9 @@ def tts():
             suffix=".mp3"
         )
 
-        os.close(fd)
+        os.close(
+            fd
+        )
 
 
         print(
@@ -572,11 +621,7 @@ def tts():
         )
 
 
-        # ----------------------------------------------------
-        # Google TTS
-        # ----------------------------------------------------
-
-        tts_engine = gTTS(
+        engine = gTTS(
 
             text=text,
 
@@ -587,14 +632,10 @@ def tts():
         )
 
 
-        tts_engine.save(
+        engine.save(
             filename
         )
 
-
-        # ----------------------------------------------------
-        # Verify file
-        # ----------------------------------------------------
 
         if not os.path.exists(
             filename
@@ -605,12 +646,12 @@ def tts():
             )
 
 
-        file_size = os.path.getsize(
+        size = os.path.getsize(
             filename
         )
 
 
-        if file_size < 100:
+        if size < 100:
 
             raise RuntimeError(
                 "TTS file is empty"
@@ -619,13 +660,9 @@ def tts():
 
         print(
             "TTS MP3 size:",
-            file_size
+            size
         )
 
-
-        # ----------------------------------------------------
-        # Response
-        # ----------------------------------------------------
 
         response = send_file(
 
@@ -642,7 +679,10 @@ def tts():
 
         response.headers[
             "Cache-Control"
-        ] = "no-cache, no-store, must-revalidate"
+        ] = (
+            "no-cache, no-store, "
+            "must-revalidate"
+        )
 
 
         response.headers[
@@ -657,12 +697,10 @@ def tts():
 
         response.headers[
             "Content-Disposition"
-        ] = "inline; filename=tts.mp3"
+        ] = (
+            "inline; filename=tts.mp3"
+        )
 
-
-        # ----------------------------------------------------
-        # Cleanup
-        # ----------------------------------------------------
 
         @response.call_on_close
         def cleanup():
@@ -735,17 +773,26 @@ def recognize_speech(
 
     try:
 
-        result = recognizer.recognize_google(
+        result = (
+            recognizer
+            .recognize_google(
 
-            audio,
+                audio,
 
-            language=language
+                language=language
 
+            )
         )
 
-        result = clean_text(result)
 
-        if is_valid_query(result):
+        result = clean_text(
+            result
+        )
+
+
+        if is_valid_query(
+            result
+        ):
 
             return result
 
@@ -791,19 +838,46 @@ def upload_audio():
 
     filename = None
 
+    request_start = time.time()
+
 
     try:
 
         # ----------------------------------------------------
-        # Read data
+        # Content type
         # ----------------------------------------------------
 
-        audio_data = request.get_data()
+        content_type = (
+            request.headers.get(
+                "Content-Type",
+                ""
+            )
+        )
+
+
+        print(
+            "UPLOAD Content-Type:",
+            content_type
+        )
+
+
+        # ----------------------------------------------------
+        # Read raw WAV
+        # ----------------------------------------------------
+
+        audio_data = request.get_data(
+            cache=False
+        )
+
+
+        audio_size = len(
+            audio_data
+        )
 
 
         print(
             "Audio received:",
-            len(audio_data),
+            audio_size,
             "bytes"
         )
 
@@ -833,11 +907,7 @@ def upload_audio():
             }), 400
 
 
-        # ----------------------------------------------------
-        # Minimum WAV size
-        # ----------------------------------------------------
-
-        if len(audio_data) < 1000:
+        if audio_size < 1000:
 
             return jsonify({
 
@@ -870,7 +940,9 @@ def upload_audio():
             suffix=".wav"
         )
 
-        os.close(fd)
+        os.close(
+            fd
+        )
 
 
         with open(
@@ -884,7 +956,7 @@ def upload_audio():
 
 
         # ----------------------------------------------------
-        # Check WAV
+        # WAV header
         # ----------------------------------------------------
 
         with open(
@@ -892,24 +964,90 @@ def upload_audio():
             "rb"
         ) as f:
 
-            header = f.read(12)
+            header = f.read(
+                44
+            )
 
 
-        if (
-            len(header) < 12
-            or
-            header[0:4] != b"RIFF"
-            or
-            header[8:12] != b"WAVE"
-        ):
+        valid_wav = (
+
+            len(header) >= 12
+
+            and
+
+            header[0:4] == b"RIFF"
+
+            and
+
+            header[8:12] == b"WAVE"
+
+        )
+
+
+        if not valid_wav:
 
             print(
-                "WARNING: WAV header invalid"
+                "INVALID WAV HEADER"
+            )
+
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "Invalid WAV file",
+
+                "transcription":
+                    None,
+
+                "hindi_transcription":
+                    None,
+
+                "english_transcription":
+                    None,
+
+                "ai_reply":
+                    "Please ask your question again."
+
+            }), 400
+
+
+        # ----------------------------------------------------
+        # WAV information
+        # ----------------------------------------------------
+
+        if len(header) >= 44:
+
+            channels = int.from_bytes(
+                header[22:24],
+                "little"
+            )
+
+            sample_rate = int.from_bytes(
+                header[24:28],
+                "little"
+            )
+
+            bits = int.from_bytes(
+                header[34:36],
+                "little"
+            )
+
+            print(
+                "WAV:",
+                channels,
+                "channel(s),",
+                sample_rate,
+                "Hz,",
+                bits,
+                "bit"
             )
 
 
         # ----------------------------------------------------
-        # Speech Recognition
+        # Speech recognition
         # ----------------------------------------------------
 
         recognizer = sr.Recognizer()
@@ -919,15 +1057,18 @@ def upload_audio():
             filename
         ) as source:
 
-            # Small ambient noise adjustment
-            recognizer.adjust_for_ambient_noise(
-                source,
-                duration=0.2
-            )
+            # IMPORTANT:
+            # Do not call adjust_for_ambient_noise()
+            # here because this is already-recorded audio.
 
             audio = recognizer.record(
                 source
             )
+
+
+        print(
+            "Starting Hindi recognition..."
+        )
 
 
         hindi_text = recognize_speech(
@@ -938,6 +1079,11 @@ def upload_audio():
 
             "hi-IN"
 
+        )
+
+
+        print(
+            "Starting English recognition..."
         )
 
 
@@ -957,6 +1103,7 @@ def upload_audio():
             hindi_text
         )
 
+
         print(
             "English:",
             english_text
@@ -968,14 +1115,23 @@ def upload_audio():
         # ----------------------------------------------------
 
         if (
+
             not is_valid_query(
                 hindi_text
             )
+
             and
+
             not is_valid_query(
                 english_text
             )
+
         ):
+
+            print(
+                "Speech not understood"
+            )
+
 
             return jsonify({
 
@@ -1003,6 +1159,11 @@ def upload_audio():
         # ----------------------------------------------------
         # AI
         # ----------------------------------------------------
+
+        print(
+            "Calling Groq..."
+        )
+
 
         ai_reply = get_ai_reply(
 
@@ -1053,7 +1214,7 @@ def upload_audio():
 
 
         # ----------------------------------------------------
-        # Final JSON
+        # Final
         # ----------------------------------------------------
 
         response_data = {
@@ -1079,9 +1240,22 @@ def upload_audio():
         }
 
 
+        elapsed = (
+            time.time()
+            - request_start
+        )
+
+
         print(
             "FINAL:",
             response_data
+        )
+
+
+        print(
+            "REQUEST TIME:",
+            round(elapsed, 2),
+            "seconds"
         )
 
 
@@ -1123,10 +1297,6 @@ def upload_audio():
 
     finally:
 
-        # ----------------------------------------------------
-        # Delete temporary WAV
-        # ----------------------------------------------------
-
         if filename:
 
             try:
@@ -1139,8 +1309,12 @@ def upload_audio():
                         filename
                     )
 
-            except Exception:
-                pass
+            except Exception as e:
+
+                print(
+                    "WAV cleanup error:",
+                    str(e)
+                )
 
 
 # ============================================================
@@ -1150,12 +1324,10 @@ def upload_audio():
 if __name__ == "__main__":
 
     port = int(
-
         os.environ.get(
             "PORT",
             10000
         )
-
     )
 
 
