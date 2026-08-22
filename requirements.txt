@@ -1,5 +1,4 @@
-Flask
-gunicorn
-requests
-SpeechRecognition
-piper-tts
+Flask==3.1.1
+requests==2.32.4
+faster-whisper==1.2.0
+gunicorn==23.0.0
