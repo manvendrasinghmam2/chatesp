@@ -1,7 +1,4 @@
-
 Flask
 requests
 SpeechRecognition
-edge-tts
 gunicorn
-
