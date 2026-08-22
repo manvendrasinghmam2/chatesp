@@ -1,5 +1,5 @@
 Flask
-gunicorn
 requests
 SpeechRecognition
 gTTS
+gunicorn
