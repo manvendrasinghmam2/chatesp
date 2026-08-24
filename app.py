@@ -27,7 +27,7 @@ AI_MODEL = os.environ.get(
 
 
 # =====================================================
-# TTS CONFIG
+# TTS
 # =====================================================
 
 TTS_URL = os.environ.get(
@@ -42,7 +42,7 @@ TTS_MODEL = os.environ.get(
 
 TTS_VOICE = os.environ.get(
     "TTS_VOICE",
-    "hannah"
+    "troy"
 )
 
 TTS_MAX_CHARS = 200
@@ -97,6 +97,9 @@ def wake():
         "AUDIO BYTES:",
         len(audio_data)
     )
+
+    # Current wake test:
+    # every wake request activates the device.
 
     response_data = {
         "status": "ok",
@@ -342,11 +345,7 @@ Determine the intended meaning and answer naturally.
         if response.status_code != 200:
 
             print(
-                "AI ERROR BODY:"
-            )
-
-            print(
-                response.text[:4000]
+                response.text[:2000]
             )
 
             return (
@@ -359,10 +358,6 @@ Determine the intended meaning and answer naturally.
 
         except Exception:
 
-            print(
-                "AI returned invalid JSON"
-            )
-
             return (
                 "AI response nahi mil saka."
             )
@@ -372,10 +367,6 @@ Determine the intended meaning and answer naturally.
         )
 
         if not choices:
-
-            print(
-                "AI choices missing"
-            )
 
             return (
                 "AI response nahi mil saka."
@@ -453,7 +444,6 @@ Determine the intended meaning and answer naturally.
 
         print(
             "AI ERROR:",
-            type(e).__name__,
             str(e)
         )
 
@@ -471,11 +461,6 @@ def generate_tts(text):
     text = clean_text(text)
 
     if not text:
-
-        print(
-            "TTS ERROR: empty text"
-        )
-
         return None
 
     if not AI_API_KEY:
@@ -486,18 +471,27 @@ def generate_tts(text):
 
         return None
 
-    # Orpheus maximum input length
+    # Keep within Orpheus input limit.
     if len(text) > TTS_MAX_CHARS:
 
         text = text[
             :TTS_MAX_CHARS
         ]
 
+        last_dot = text.rfind(".")
+
+        if last_dot > 40:
+
+            text = text[
+                :last_dot + 1
+            ]
+
     payload = {
         "model": TTS_MODEL,
         "voice": TTS_VOICE,
         "input": text,
-        "response_format": "wav"
+        "response_format": "wav",
+        "sample_rate": 16000
     }
 
     headers = {
@@ -515,23 +509,8 @@ def generate_tts(text):
 
         print()
         print("========================================")
-        print("GROQ TTS REQUEST")
+        print("TTS REQUEST")
         print("========================================")
-
-        print(
-            "URL:",
-            TTS_URL
-        )
-
-        print(
-            "MODEL:",
-            TTS_MODEL
-        )
-
-        print(
-            "VOICE:",
-            TTS_VOICE
-        )
 
         print(
             "TEXT:",
@@ -546,42 +525,18 @@ def generate_tts(text):
         )
 
         print(
-            "GROQ TTS HTTP:",
+            "TTS HTTP:",
             response.status_code
-        )
-
-        print(
-            "GROQ CONTENT TYPE:",
-            response.headers.get(
-                "Content-Type"
-            )
-        )
-
-        print(
-            "GROQ CONTENT LENGTH:",
-            response.headers.get(
-                "Content-Length"
-            )
-        )
-
-        print(
-            "GROQ AUDIO BYTES:",
-            len(response.content)
         )
 
         if response.status_code != 200:
 
-            print()
             print(
-                "========================================"
+                "TTS ERROR:"
             )
 
             print(
-                "GROQ TTS ERROR BODY:"
-            )
-
-            print(
-                response.text[:4000]
+                response.text[:2000]
             )
 
             print(
@@ -600,46 +555,8 @@ def generate_tts(text):
 
             return None
 
-        # =================================================
-        # WAV VALIDATION
-        # =================================================
-
-        if len(audio_data) < 44:
-
-            print(
-                "TTS ERROR: WAV too small"
-            )
-
-            return None
-
-        if audio_data[0:4] != b"RIFF":
-
-            print(
-                "TTS ERROR: response is NOT RIFF/WAV"
-            )
-
-            print(
-                "FIRST BYTES:",
-                audio_data[:100]
-            )
-
-            return None
-
-        if audio_data[8:12] != b"WAVE":
-
-            print(
-                "TTS ERROR: invalid WAVE header"
-            )
-
-            return None
-
-        print()
         print(
-            "TTS SUCCESS"
-        )
-
-        print(
-            "WAV BYTES:",
+            "TTS AUDIO BYTES:",
             len(audio_data)
         )
 
@@ -651,18 +568,13 @@ def generate_tts(text):
 
     except requests.exceptions.Timeout:
 
-        print(
-            "TTS TIMEOUT"
-        )
+        print("TTS TIMEOUT")
 
         return None
 
-    except requests.exceptions.ConnectionError as e:
+    except requests.exceptions.ConnectionError:
 
-        print(
-            "TTS CONNECTION ERROR:",
-            str(e)
-        )
+        print("TTS CONNECTION ERROR")
 
         return None
 
@@ -670,7 +582,6 @@ def generate_tts(text):
 
         print(
             "TTS ERROR:",
-            type(e).__name__,
             str(e)
         )
 
@@ -689,18 +600,8 @@ def tts():
 
     try:
 
-        print()
-        print("========================================")
-        print("ESP32 TTS REQUEST")
-        print("========================================")
-
         data = request.get_json(
             silent=True
-        )
-
-        print(
-            "JSON:",
-            data
         )
 
         if not data:
@@ -712,11 +613,6 @@ def tts():
 
         text = clean_text(
             data.get("text")
-        )
-
-        print(
-            "TEXT:",
-            text
         )
 
         if not text:
@@ -732,70 +628,26 @@ def tts():
 
         if audio_data is None:
 
-            print(
-                "TTS GENERATION FAILED"
-            )
-
             return jsonify({
                 "status": "error",
                 "message": "TTS generation failed"
             }), 500
 
-        print(
-            "RETURNING AUDIO:",
-            len(audio_data),
-            "bytes"
-        )
-
-        response = Response(
+        return Response(
             audio_data,
             status=200,
-            mimetype="audio/wav"
+            mimetype="audio/wav",
+            headers={
+                "Cache-Control":
+                    "no-cache"
+            }
         )
-
-        # =================================================
-        # IMPORTANT FOR ESP32
-        # =================================================
-
-        response.headers[
-            "Content-Length"
-        ] = str(
-            len(audio_data)
-        )
-
-        response.headers[
-            "Cache-Control"
-        ] = "no-cache"
-
-        response.headers[
-            "Connection"
-        ] = "close"
-
-        print(
-            "FLASK CONTENT LENGTH:",
-            len(audio_data)
-        )
-
-        print(
-            "========================================"
-        )
-
-        return response
 
     except Exception as e:
 
-        print()
-        print("========================================")
-        print("TTS SERVER EXCEPTION")
-        print("========================================")
-
         print(
-            type(e).__name__,
+            "TTS SERVER ERROR:",
             str(e)
-        )
-
-        print(
-            "========================================"
         )
 
         return jsonify({
@@ -881,7 +733,7 @@ def upload_audio():
         )
 
         # =================================================
-        # SPEECH RECOGNITION
+        # SPEECH
         # =================================================
 
         recognizer = sr.Recognizer()
@@ -906,11 +758,10 @@ def upload_audio():
 
         try:
 
-            hindi_text =
-                recognizer.recognize_google(
-                    audio,
-                    language="hi-IN"
-                )
+            hindi_text = recognizer.recognize_google(
+                audio,
+                language="hi-IN"
+            )
 
             hindi_text = clean_text(
                 hindi_text
@@ -936,8 +787,7 @@ def upload_audio():
 
             return jsonify({
                 "status": "error",
-                "message":
-                    "Speech service error",
+                "message": "Speech service error",
                 "details": str(e)
             }), 500
 
@@ -950,11 +800,10 @@ def upload_audio():
 
         try:
 
-            english_text =
-                recognizer.recognize_google(
-                    audio,
-                    language="en-IN"
-                )
+            english_text = recognizer.recognize_google(
+                audio,
+                language="en-IN"
+            )
 
             english_text = clean_text(
                 english_text
@@ -980,8 +829,7 @@ def upload_audio():
 
             return jsonify({
                 "status": "error",
-                "message":
-                    "Speech service error",
+                "message": "Speech service error",
                 "details": str(e),
                 "hindi_transcription":
                     hindi_text,
@@ -1075,17 +923,11 @@ def upload_audio():
     except Exception as e:
 
         print()
-        print("========================================")
         print("SERVER ERROR")
-        print("========================================")
 
         print(
             type(e).__name__,
             str(e)
-        )
-
-        print(
-            "========================================"
         )
 
         return jsonify({
