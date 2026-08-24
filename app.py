@@ -27,7 +27,7 @@ AI_MODEL = os.environ.get(
 
 
 # =====================================================
-# TTS - FEMALE VOICE
+# TTS - FEMALE
 # =====================================================
 
 TTS_URL = os.environ.get(
@@ -40,13 +40,11 @@ TTS_MODEL = os.environ.get(
     "canopylabs/orpheus-v1-english"
 )
 
-# FEMALE VOICE
-# Groq Orpheus female voices:
+# Female voice:
 # autumn
 # diana
 # hannah
-#
-# Currently selected:
+
 TTS_VOICE = os.environ.get(
     "TTS_VOICE",
     "hannah"
@@ -80,7 +78,7 @@ def health():
         "tts_engine": "Groq Orpheus",
         "tts_model": TTS_MODEL,
         "tts_voice": TTS_VOICE,
-        "voice_type": "female"
+        "voice_gender": "female"
     })
 
 
@@ -97,6 +95,16 @@ def wake():
     print("========================================")
 
     audio_data = request.get_data()
+
+    print(
+        "CONTENT TYPE:",
+        request.content_type
+    )
+
+    print(
+        "CONTENT LENGTH:",
+        request.content_length
+    )
 
     print(
         "AUDIO BYTES:",
@@ -351,15 +359,7 @@ Determine the intended meaning and answer naturally.
                 "AI response nahi mil saka."
             )
 
-        try:
-
-            data = response.json()
-
-        except Exception:
-
-            return (
-                "AI response nahi mil saka."
-            )
+        data = response.json()
 
         choices = data.get(
             "choices"
@@ -415,11 +415,10 @@ Determine the intended meaning and answer naturally.
                 "AI response nahi mil saka."
             )
 
-        print()
-        print("AI REPLY:")
-        print(reply)
-
-        print("========================================")
+        print(
+            "AI REPLY:",
+            reply
+        )
 
         return reply
 
@@ -452,7 +451,7 @@ Determine the intended meaning and answer naturally.
 
 
 # =====================================================
-# TTS - FEMALE HANNAH
+# TTS
 # =====================================================
 
 def generate_tts(text):
@@ -470,15 +469,10 @@ def generate_tts(text):
 
         return None
 
-    # =================================================
-    # LIMIT TEXT
-    # =================================================
-
+    # Groq Orpheus maximum input = 200 chars
     if len(text) > TTS_MAX_CHARS:
 
-        text = text[
-            :TTS_MAX_CHARS
-        ]
+        text = text[:TTS_MAX_CHARS]
 
         last_dot = text.rfind(".")
 
@@ -488,21 +482,15 @@ def generate_tts(text):
                 :last_dot + 1
             ]
 
-    # =================================================
-    # TTS PAYLOAD
-    # =================================================
-
     payload = {
         "model": TTS_MODEL,
 
-        # FEMALE VOICE
+        # FEMALE
         "voice": TTS_VOICE,
 
         "input": text,
 
-        "response_format": "wav",
-
-        "sample_rate": 16000
+        "response_format": "wav"
     }
 
     headers = {
@@ -529,12 +517,12 @@ def generate_tts(text):
         )
 
         print(
-            "TTS MODEL:",
+            "MODEL:",
             TTS_MODEL
         )
 
         print(
-            "TTS VOICE:",
+            "VOICE:",
             TTS_VOICE
         )
 
@@ -560,10 +548,6 @@ def generate_tts(text):
                 response.text[:2000]
             )
 
-            print(
-                "========================================"
-            )
-
             return None
 
         audio_data = response.content
@@ -582,7 +566,7 @@ def generate_tts(text):
         )
 
         print(
-            "VOICE USED:",
+            "FEMALE VOICE:",
             TTS_VOICE
         )
 
@@ -595,13 +579,11 @@ def generate_tts(text):
     except requests.exceptions.Timeout:
 
         print("TTS TIMEOUT")
-
         return None
 
     except requests.exceptions.ConnectionError:
 
         print("TTS CONNECTION ERROR")
-
         return None
 
     except Exception as e:
@@ -648,16 +630,6 @@ def tts():
                 "message": "No text received"
             }), 400
 
-        print()
-        print("========================================")
-        print("TTS ENDPOINT")
-        print("========================================")
-
-        print(
-            "TEXT RECEIVED:",
-            text
-        )
-
         audio_data = generate_tts(
             text
         )
@@ -669,18 +641,25 @@ def tts():
                 "message": "TTS generation failed"
             }), 500
 
-        return Response(
+        # IMPORTANT:
+        # Return complete WAV with known size.
+        response = Response(
             audio_data,
             status=200,
-            mimetype="audio/wav",
-            headers={
-                "Cache-Control":
-                    "no-cache",
-
-                "Content-Disposition":
-                    "inline; filename=voice.wav"
-            }
+            mimetype="audio/wav"
         )
+
+        response.headers["Content-Length"] = str(
+            len(audio_data)
+        )
+
+        response.headers["Cache-Control"] = (
+            "no-cache, no-store, must-revalidate"
+        )
+
+        response.headers["Connection"] = "close"
+
+        return response
 
     except Exception as e:
 
@@ -724,6 +703,13 @@ def upload_audio():
         print(
             "CONTENT LENGTH:",
             request.content_length
+        )
+
+        print(
+            "TRANSFER ENCODING:",
+            request.headers.get(
+                "Transfer-Encoding"
+            )
         )
 
         print(
@@ -772,7 +758,7 @@ def upload_audio():
         )
 
         # =================================================
-        # SPEECH RECOGNITION
+        # SPEECH
         # =================================================
 
         recognizer = sr.Recognizer()
@@ -1005,7 +991,6 @@ def upload_audio():
                     )
 
             except Exception:
-
                 pass
 
 
@@ -1048,8 +1033,7 @@ if __name__ == "__main__":
     )
 
     print(
-        "VOICE TYPE:",
-        "FEMALE"
+        "VOICE GENDER: FEMALE"
     )
 
     print(
