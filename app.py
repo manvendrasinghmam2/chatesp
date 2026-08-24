@@ -40,9 +40,10 @@ TTS_MODEL = os.environ.get(
     "canopylabs/orpheus-v1-english"
 )
 
+# FEMALE VOICE
 TTS_VOICE = os.environ.get(
     "TTS_VOICE",
-    "troy"
+    "autumn"
 )
 
 TTS_MAX_CHARS = 200
@@ -97,9 +98,6 @@ def wake():
         "AUDIO BYTES:",
         len(audio_data)
     )
-
-    # Current wake test:
-    # every wake request activates the device.
 
     response_data = {
         "status": "ok",
@@ -515,6 +513,11 @@ def generate_tts(text):
         print(
             "TEXT:",
             text
+        )
+
+        print(
+            "VOICE:",
+            TTS_VOICE
         )
 
         response = requests.post(
