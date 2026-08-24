@@ -27,28 +27,19 @@ AI_MODEL = os.environ.get(
 
 
 # =====================================================
-# TTS - FEMALE
+# FEMALE TTS
 # =====================================================
 
-TTS_URL = os.environ.get(
-    "TTS_URL",
-    "https://api.groq.com/openai/v1/audio/speech"
-)
+TTS_URL = "https://api.groq.com/openai/v1/audio/speech"
 
-TTS_MODEL = os.environ.get(
-    "TTS_MODEL",
-    "canopylabs/orpheus-v1-english"
-)
+TTS_MODEL = "canopylabs/orpheus-v1-english"
 
-# Female voice:
+# FEMALE:
 # autumn
 # diana
 # hannah
 
-TTS_VOICE = os.environ.get(
-    "TTS_VOICE",
-    "hannah"
-)
+TTS_VOICE = "hannah"
 
 TTS_MAX_CHARS = 200
 
@@ -86,7 +77,10 @@ def health():
 # WAKE
 # =====================================================
 
-@app.route("/wake", methods=["POST", "GET"])
+@app.route(
+    "/wake",
+    methods=["POST", "GET"]
+)
 def wake():
 
     print()
@@ -123,34 +117,11 @@ def wake():
         response_data
     )
 
-    print("========================================")
-
-    return jsonify(response_data)
-
-
-# =====================================================
-# TEST
-# =====================================================
-
-@app.route("/test", methods=["POST"])
-def test():
-
-    data = request.get_json(
-        silent=True
+    print(
+        "========================================"
     )
 
-    if not data:
-
-        return jsonify({
-            "status": "error",
-            "message": "No JSON received"
-        }), 400
-
-    return jsonify({
-        "status": "ok",
-        "message": "Data received",
-        "data": data
-    })
+    return jsonify(response_data)
 
 
 # =====================================================
@@ -219,12 +190,6 @@ def get_ai_reply(
         english_text
     )
 
-    if not AI_API_KEY:
-
-        return (
-            "AI response nahi mil saka."
-        )
-
     if (
         not is_valid_query(hindi_text)
         and
@@ -233,6 +198,12 @@ def get_ai_reply(
 
         return (
             "Please ask your question again."
+        )
+
+    if not AI_API_KEY:
+
+        return (
+            "AI response nahi mil saka."
         )
 
     system_prompt = """
@@ -271,7 +242,7 @@ VOICE STYLE:
 
 The answer will be spoken aloud.
 
-Keep answers very concise.
+Keep answers concise.
 
 Usually one or two sentences.
 
@@ -304,6 +275,7 @@ Determine the intended meaning and answer naturally.
 
     payload = {
         "model": AI_MODEL,
+
         "messages": [
             {
                 "role": "system",
@@ -314,8 +286,11 @@ Determine the intended meaning and answer naturally.
                 "content": user_content
             }
         ],
+
         "temperature": 0.2,
+
         "max_completion_tokens": 200,
+
         "stream": False
     }
 
@@ -401,9 +376,7 @@ Determine the intended meaning and answer naturally.
 
         for prefix in prefixes:
 
-            if reply.startswith(
-                prefix
-            ):
+            if reply.startswith(prefix):
 
                 reply = reply[
                     len(prefix):
@@ -469,7 +442,7 @@ def generate_tts(text):
 
         return None
 
-    # Groq Orpheus maximum input = 200 chars
+    # Groq Orpheus input max 200 chars
     if len(text) > TTS_MAX_CHARS:
 
         text = text[:TTS_MAX_CHARS]
@@ -483,14 +456,17 @@ def generate_tts(text):
             ]
 
     payload = {
-        "model": TTS_MODEL,
+        "model":
+            TTS_MODEL,
 
-        # FEMALE
-        "voice": TTS_VOICE,
+        "voice":
+            TTS_VOICE,
 
-        "input": text,
+        "input":
+            text,
 
-        "response_format": "wav"
+        "response_format":
+            "wav"
     }
 
     headers = {
@@ -508,7 +484,7 @@ def generate_tts(text):
 
         print()
         print("========================================")
-        print("TTS REQUEST")
+        print("FEMALE TTS REQUEST")
         print("========================================")
 
         print(
@@ -579,11 +555,13 @@ def generate_tts(text):
     except requests.exceptions.Timeout:
 
         print("TTS TIMEOUT")
+
         return None
 
     except requests.exceptions.ConnectionError:
 
         print("TTS CONNECTION ERROR")
+
         return None
 
     except Exception as e:
@@ -638,26 +616,39 @@ def tts():
 
             return jsonify({
                 "status": "error",
-                "message": "TTS generation failed"
+                "message":
+                    "TTS generation failed"
             }), 500
 
-        # IMPORTANT:
-        # Return complete WAV with known size.
+        # =================================================
+        # IMPORTANT
+        # No Flask streaming.
+        # Send complete WAV.
+        # ESP32 receives Content-Length.
+        # =================================================
+
         response = Response(
             audio_data,
             status=200,
-            mimetype="audio/wav"
+            mimetype="audio/wav",
+            direct_passthrough=True
         )
 
-        response.headers["Content-Length"] = str(
-            len(audio_data)
-        )
+        response.headers[
+            "Content-Length"
+        ] = str(len(audio_data))
 
-        response.headers["Cache-Control"] = (
-            "no-cache, no-store, must-revalidate"
-        )
+        response.headers[
+            "Content-Type"
+        ] = "audio/wav"
 
-        response.headers["Connection"] = "close"
+        response.headers[
+            "Cache-Control"
+        ] = "no-cache, no-store, must-revalidate"
+
+        response.headers[
+            "Connection"
+        ] = "close"
 
         return response
 
@@ -725,7 +716,8 @@ def upload_audio():
 
             return jsonify({
                 "status": "error",
-                "message": "No audio received",
+                "message":
+                    "No audio received",
                 "transcription": None,
                 "hindi_transcription": None,
                 "english_transcription": None,
@@ -748,9 +740,7 @@ def upload_audio():
             "wb"
         ) as f:
 
-            f.write(
-                audio_data
-            )
+            f.write(audio_data)
 
         print(
             "WAV FILE:",
@@ -766,6 +756,12 @@ def upload_audio():
         with sr.AudioFile(
             filename
         ) as source:
+
+            # Small noise adjustment
+            recognizer.adjust_for_ambient_noise(
+                source,
+                duration=0.15
+            )
 
             audio = recognizer.record(
                 source
@@ -810,12 +806,6 @@ def upload_audio():
                 str(e)
             )
 
-            return jsonify({
-                "status": "error",
-                "message": "Speech service error",
-                "details": str(e)
-            }), 500
-
         # =================================================
         # ENGLISH
         # =================================================
@@ -852,16 +842,6 @@ def upload_audio():
                 str(e)
             )
 
-            return jsonify({
-                "status": "error",
-                "message": "Speech service error",
-                "details": str(e),
-                "hindi_transcription":
-                    hindi_text,
-                "english_transcription":
-                    None
-            }), 500
-
         # =================================================
         # VALIDATION
         # =================================================
@@ -874,6 +854,7 @@ def upload_audio():
 
             return jsonify({
                 "status": "error",
+
                 "message":
                     "Speech not understood",
 
@@ -921,7 +902,9 @@ def upload_audio():
         # =================================================
 
         response_data = {
-            "status": "ok",
+
+            "status":
+                "ok",
 
             "transcription":
                 transcription,
@@ -959,7 +942,9 @@ def upload_audio():
     except Exception as e:
 
         print()
-        print("SERVER ERROR")
+        print(
+            "SERVER ERROR"
+        )
 
         print(
             type(e).__name__,
@@ -967,11 +952,22 @@ def upload_audio():
         )
 
         return jsonify({
-            "status": "error",
-            "message": str(e),
-            "transcription": None,
-            "hindi_transcription": None,
-            "english_transcription": None,
+
+            "status":
+                "error",
+
+            "message":
+                str(e),
+
+            "transcription":
+                None,
+
+            "hindi_transcription":
+                None,
+
+            "english_transcription":
+                None,
+
             "ai_reply":
                 "AI response nahi mil saka."
         }), 500
@@ -1009,7 +1005,7 @@ if __name__ == "__main__":
 
     print()
     print("========================================")
-    print("ESP32 VOICE SERVER")
+    print("ESP32 FEMALE VOICE SERVER")
     print("========================================")
 
     print(
