@@ -27,7 +27,7 @@ AI_MODEL = os.environ.get(
 
 
 # =====================================================
-# TTS CONFIGURATION
+# TTS
 # =====================================================
 
 TTS_URL = os.environ.get(
@@ -66,13 +66,26 @@ def home():
 def health():
 
     return jsonify({
+
         "status": "online",
-        "speech_engine": "Google Speech Recognition",
-        "ai_engine": "Groq",
-        "model": AI_MODEL,
-        "tts_engine": "Groq Orpheus",
-        "tts_model": TTS_MODEL,
-        "tts_voice": TTS_VOICE
+
+        "speech_engine":
+            "Google Speech Recognition",
+
+        "ai_engine":
+            "Groq",
+
+        "model":
+            AI_MODEL,
+
+        "tts_engine":
+            "Groq Orpheus",
+
+        "tts_model":
+            TTS_MODEL,
+
+        "tts_voice":
+            TTS_VOICE
     })
 
 
@@ -80,7 +93,10 @@ def health():
 # WAKE
 # =====================================================
 
-@app.route("/wake", methods=["POST", "GET"])
+@app.route(
+    "/wake",
+    methods=["POST", "GET"]
+)
 def wake():
 
     print()
@@ -90,49 +106,39 @@ def wake():
 
     audio_data = request.get_data()
 
-    print("AUDIO BYTES:", len(audio_data))
+    print(
+        "AUDIO BYTES:",
+        len(audio_data)
+    )
 
-    # -------------------------------------------------
-    # CURRENT WAKE TEST
-    #
-    # Har wake request ko TRUE return karega.
-    # Isse ESP32 testing ke liye ACTIVE mode me jayega.
-    # -------------------------------------------------
+    # Temporary wake mode.
+    # Every wake request returns true.
 
     response_data = {
-        "status": "ok",
-        "wake": True,
-        "english": "Hello",
-        "hindi": None
+
+        "status":
+            "ok",
+
+        "wake":
+            True,
+
+        "english":
+            "Hello",
+
+        "hindi":
+            None
     }
 
-    print("WAKE RESPONSE:", response_data)
+    print(
+        "WAKE RESPONSE:",
+        response_data
+    )
+
     print("========================================")
 
-    return jsonify(response_data)
-
-
-# =====================================================
-# TEST
-# =====================================================
-
-@app.route("/test", methods=["POST"])
-def test():
-
-    data = request.get_json(silent=True)
-
-    if not data:
-
-        return jsonify({
-            "status": "error",
-            "message": "No JSON received"
-        }), 400
-
-    return jsonify({
-        "status": "ok",
-        "message": "Data received",
-        "data": data
-    })
+    return jsonify(
+        response_data
+    )
 
 
 # =====================================================
@@ -142,9 +148,12 @@ def test():
 def clean_text(text):
 
     if not text:
+
         return ""
 
-    text = str(text).strip()
+    text = str(
+        text
+    ).strip()
 
     text = re.sub(
         r"\s+",
@@ -162,14 +171,19 @@ def clean_text(text):
 def is_valid_query(text):
 
     if not text:
+
         return False
 
-    text = str(text).strip()
+    text = str(
+        text
+    ).strip()
 
     if len(text) < 2:
+
         return False
 
     bad_values = [
+
         "unknown",
         "none",
         "null",
@@ -179,6 +193,7 @@ def is_valid_query(text):
     ]
 
     if text.lower() in bad_values:
+
         return False
 
     return True
@@ -188,14 +203,24 @@ def is_valid_query(text):
 # AI REPLY
 # =====================================================
 
-def get_ai_reply(hindi_text, english_text):
+def get_ai_reply(
+    hindi_text,
+    english_text
+):
 
-    hindi_text = clean_text(hindi_text)
-    english_text = clean_text(english_text)
+    hindi_text = clean_text(
+        hindi_text
+    )
+
+    english_text = clean_text(
+        english_text
+    )
 
     if not AI_API_KEY:
 
-        return "AI response nahi mil saka."
+        return (
+            "AI response nahi mil saka."
+        )
 
     if (
         not is_valid_query(hindi_text)
@@ -203,7 +228,9 @@ def get_ai_reply(hindi_text, english_text):
         not is_valid_query(english_text)
     ):
 
-        return "Please ask your question again."
+        return (
+            "Please ask your question again."
+        )
 
     system_prompt = """
 You are a professional bilingual voice assistant running on an ESP32.
@@ -273,30 +300,49 @@ Determine the intended meaning and answer naturally.
 """
 
     payload = {
-        "model": AI_MODEL,
+
+        "model":
+            AI_MODEL,
 
         "messages": [
+
             {
-                "role": "system",
-                "content": system_prompt
+                "role":
+                    "system",
+
+                "content":
+                    system_prompt
             },
+
             {
-                "role": "user",
-                "content": user_content
+                "role":
+                    "user",
+
+                "content":
+                    user_content
             }
         ],
 
-        "temperature": 0.2,
+        "temperature":
+            0.2,
 
-        "max_completion_tokens": 200,
+        "max_completion_tokens":
+            200,
 
-        "stream": False
+        "stream":
+            False
     }
 
     headers = {
-        "Authorization": "Bearer " + AI_API_KEY,
-        "Content-Type": "application/json",
-        "Accept": "application/json"
+
+        "Authorization":
+            "Bearer " + AI_API_KEY,
+
+        "Content-Type":
+            "application/json",
+
+        "Accept":
+            "application/json"
     }
 
     try:
@@ -307,9 +353,13 @@ Determine the intended meaning and answer naturally.
         print("========================================")
 
         response = requests.post(
+
             AI_URL,
+
             headers=headers,
+
             json=payload,
+
             timeout=35
         )
 
@@ -320,23 +370,25 @@ Determine the intended meaning and answer naturally.
 
         if response.status_code != 200:
 
-            print(response.text[:2000])
+            print(
+                response.text[:2000]
+            )
 
-            return "AI response nahi mil saka."
+            return (
+                "AI response nahi mil saka."
+            )
 
-        try:
+        data = response.json()
 
-            data = response.json()
-
-        except Exception:
-
-            return "AI response nahi mil saka."
-
-        choices = data.get("choices")
+        choices = data.get(
+            "choices"
+        )
 
         if not choices:
 
-            return "AI response nahi mil saka."
+            return (
+                "AI response nahi mil saka."
+            )
 
         message = choices[0].get(
             "message",
@@ -352,7 +404,9 @@ Determine the intended meaning and answer naturally.
 
             reply = ""
 
-        reply = str(reply).strip()
+        reply = str(
+            reply
+        ).strip()
 
         reply = reply.replace(
             "```",
@@ -360,6 +414,7 @@ Determine the intended meaning and answer naturally.
         ).strip()
 
         prefixes = [
+
             "AI:",
             "Answer:",
             "Response:"
@@ -367,7 +422,9 @@ Determine the intended meaning and answer naturally.
 
         for prefix in prefixes:
 
-            if reply.startswith(prefix):
+            if reply.startswith(
+                prefix
+            ):
 
                 reply = reply[
                     len(prefix):
@@ -375,7 +432,9 @@ Determine the intended meaning and answer naturally.
 
         if not reply:
 
-            return "AI response nahi mil saka."
+            return (
+                "AI response nahi mil saka."
+            )
 
         print()
         print("AI REPLY:")
@@ -387,15 +446,23 @@ Determine the intended meaning and answer naturally.
 
     except requests.exceptions.Timeout:
 
-        print("AI TIMEOUT")
+        print(
+            "AI TIMEOUT"
+        )
 
-        return "AI response nahi mil saka."
+        return (
+            "AI response nahi mil saka."
+        )
 
     except requests.exceptions.ConnectionError:
 
-        print("AI CONNECTION ERROR")
+        print(
+            "AI CONNECTION ERROR"
+        )
 
-        return "AI response nahi mil saka."
+        return (
+            "AI response nahi mil saka."
+        )
 
     except Exception as e:
 
@@ -404,7 +471,9 @@ Determine the intended meaning and answer naturally.
             str(e)
         )
 
-        return "AI response nahi mil saka."
+        return (
+            "AI response nahi mil saka."
+        )
 
 
 # =====================================================
@@ -413,7 +482,9 @@ Determine the intended meaning and answer naturally.
 
 def generate_tts(text):
 
-    text = clean_text(text)
+    text = clean_text(
+        text
+    )
 
     if not text:
 
@@ -427,13 +498,13 @@ def generate_tts(text):
 
         return None
 
-    # -------------------------------------------------
-    # LIMIT TEXT
-    # -------------------------------------------------
+    # Keep under model limit.
 
     if len(text) > TTS_MAX_CHARS:
 
-        text = text[:TTS_MAX_CHARS]
+        text = text[
+            :TTS_MAX_CHARS
+        ]
 
         last_dot = text.rfind(".")
 
@@ -445,15 +516,20 @@ def generate_tts(text):
 
     payload = {
 
-        "model": TTS_MODEL,
+        "model":
+            TTS_MODEL,
 
-        "voice": TTS_VOICE,
+        "voice":
+            TTS_VOICE,
 
-        "input": text,
+        "input":
+            text,
 
-        "response_format": "wav",
+        "response_format":
+            "wav",
 
-        "sample_rate": 16000
+        "sample_rate":
+            16000
     }
 
     headers = {
@@ -498,7 +574,9 @@ def generate_tts(text):
 
         if response.status_code != 200:
 
-            print("TTS ERROR:")
+            print(
+                "TTS ERROR:"
+            )
 
             print(
                 response.text[:2000]
@@ -513,7 +591,7 @@ def generate_tts(text):
         if not audio_data:
 
             print(
-                "TTS returned empty audio"
+                "TTS EMPTY AUDIO"
             )
 
             return None
@@ -529,13 +607,17 @@ def generate_tts(text):
 
     except requests.exceptions.Timeout:
 
-        print("TTS TIMEOUT")
+        print(
+            "TTS TIMEOUT"
+        )
 
         return None
 
     except requests.exceptions.ConnectionError:
 
-        print("TTS CONNECTION ERROR")
+        print(
+            "TTS CONNECTION ERROR"
+        )
 
         return None
 
@@ -553,7 +635,10 @@ def generate_tts(text):
 # TTS ENDPOINT
 # =====================================================
 
-@app.route("/tts", methods=["POST"])
+@app.route(
+    "/tts",
+    methods=["POST"]
+)
 def tts():
 
     try:
@@ -566,7 +651,8 @@ def tts():
 
             return jsonify({
 
-                "status": "error",
+                "status":
+                    "error",
 
                 "message":
                     "No JSON received"
@@ -581,7 +667,8 @@ def tts():
 
             return jsonify({
 
-                "status": "error",
+                "status":
+                    "error",
 
                 "message":
                     "No text received"
@@ -596,7 +683,8 @@ def tts():
 
             return jsonify({
 
-                "status": "error",
+                "status":
+                    "error",
 
                 "message":
                     "TTS generation failed"
@@ -617,7 +705,12 @@ def tts():
                     "no-cache",
 
                 "Content-Length":
-                    str(len(audio_data))
+                    str(
+                        len(audio_data)
+                    ),
+
+                "Connection":
+                    "close"
             }
         )
 
@@ -630,9 +723,11 @@ def tts():
 
         return jsonify({
 
-            "status": "error",
+            "status":
+                "error",
 
-            "message": str(e)
+            "message":
+                str(e)
 
         }), 500
 
@@ -641,7 +736,10 @@ def tts():
 # UPLOAD AUDIO
 # =====================================================
 
-@app.route("/uploadAudio", methods=["POST"])
+@app.route(
+    "/uploadAudio",
+    methods=["POST"]
+)
 def upload_audio():
 
     filename = None
@@ -676,25 +774,27 @@ def upload_audio():
 
             return jsonify({
 
-                "status": "error",
+                "status":
+                    "error",
 
                 "message":
                     "No audio received",
 
-                "transcription": None,
+                "transcription":
+                    None,
 
-                "hindi_transcription": None,
+                "hindi_transcription":
+                    None,
 
-                "english_transcription": None,
+                "english_transcription":
+                    None,
 
                 "ai_reply":
                     "Please ask your question again."
 
             }), 400
 
-        # -------------------------------------------------
         # SAVE WAV
-        # -------------------------------------------------
 
         fd, filename = tempfile.mkstemp(
             suffix=".wav"
@@ -707,16 +807,16 @@ def upload_audio():
             "wb"
         ) as f:
 
-            f.write(audio_data)
+            f.write(
+                audio_data
+            )
 
         print(
             "WAV FILE:",
             filename
         )
 
-        # -------------------------------------------------
         # SPEECH RECOGNIZER
-        # -------------------------------------------------
 
         recognizer = sr.Recognizer()
 
@@ -741,16 +841,16 @@ def upload_audio():
 
         try:
 
-            hindi_text = recognizer.recognize_google(
+            hindi_text =
+                recognizer.recognize_google(
+                    audio,
+                    language="hi-IN"
+                )
 
-                audio,
-
-                language="hi-IN"
-            )
-
-            hindi_text = clean_text(
-                hindi_text
-            )
+            hindi_text =
+                clean_text(
+                    hindi_text
+                )
 
             print(
                 "Hindi:",
@@ -772,7 +872,8 @@ def upload_audio():
 
             return jsonify({
 
-                "status": "error",
+                "status":
+                    "error",
 
                 "message":
                     "Speech service error",
@@ -791,16 +892,16 @@ def upload_audio():
 
         try:
 
-            english_text = recognizer.recognize_google(
+            english_text =
+                recognizer.recognize_google(
+                    audio,
+                    language="en-IN"
+                )
 
-                audio,
-
-                language="en-IN"
-            )
-
-            english_text = clean_text(
-                english_text
-            )
+            english_text =
+                clean_text(
+                    english_text
+                )
 
             print(
                 "English:",
@@ -822,7 +923,8 @@ def upload_audio():
 
             return jsonify({
 
-                "status": "error",
+                "status":
+                    "error",
 
                 "message":
                     "Speech service error",
@@ -844,22 +946,28 @@ def upload_audio():
 
         if (
 
-            not is_valid_query(hindi_text)
+            not is_valid_query(
+                hindi_text
+            )
 
             and
 
-            not is_valid_query(english_text)
+            not is_valid_query(
+                english_text
+            )
 
         ):
 
             return jsonify({
 
-                "status": "error",
+                "status":
+                    "error",
 
                 "message":
                     "Speech not understood",
 
-                "transcription": None,
+                "transcription":
+                    None,
 
                 "hindi_transcription":
                     hindi_text,
@@ -876,12 +984,11 @@ def upload_audio():
         # AI
         # =================================================
 
-        ai_reply = get_ai_reply(
-
-            hindi_text,
-
-            english_text
-        )
+        ai_reply =
+            get_ai_reply(
+                hindi_text,
+                english_text
+            )
 
         # =================================================
         # BEST TRANSCRIPTION
@@ -891,18 +998,16 @@ def upload_audio():
             english_text
         ):
 
-            transcription = (
+            transcription =
                 english_text
-            )
 
         else:
 
-            transcription = (
+            transcription =
                 hindi_text
-            )
 
         # =================================================
-        # FINAL RESPONSE
+        # FINAL
         # =================================================
 
         response_data = {
@@ -1038,7 +1143,10 @@ if __name__ == "__main__":
     print("========================================")
 
     app.run(
+
         host="0.0.0.0",
+
         port=port,
+
         threaded=True
     )
