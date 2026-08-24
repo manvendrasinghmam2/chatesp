@@ -43,7 +43,7 @@ TTS_MODEL = os.environ.get(
 # Groq Orpheus English female voice
 TTS_VOICE = os.environ.get(
     "TTS_VOICE",
-    "hannah"
+    "Diana"
 )
 
 TTS_MAX_CHARS = 200
