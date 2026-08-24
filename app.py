@@ -27,7 +27,7 @@ AI_MODEL = os.environ.get(
 
 
 # =====================================================
-# TTS
+# TTS - FEMALE VOICE
 # =====================================================
 
 TTS_URL = os.environ.get(
@@ -40,9 +40,16 @@ TTS_MODEL = os.environ.get(
     "canopylabs/orpheus-v1-english"
 )
 
+# FEMALE VOICE
+# Groq Orpheus female voices:
+# autumn
+# diana
+# hannah
+#
+# Currently selected:
 TTS_VOICE = os.environ.get(
     "TTS_VOICE",
-    "troy"
+    "hannah"
 )
 
 TTS_MAX_CHARS = 200
@@ -72,7 +79,8 @@ def health():
         "model": AI_MODEL,
         "tts_engine": "Groq Orpheus",
         "tts_model": TTS_MODEL,
-        "tts_voice": TTS_VOICE
+        "tts_voice": TTS_VOICE,
+        "voice_type": "female"
     })
 
 
@@ -80,10 +88,7 @@ def health():
 # WAKE
 # =====================================================
 
-@app.route(
-    "/wake",
-    methods=["POST", "GET"]
-)
+@app.route("/wake", methods=["POST", "GET"])
 def wake():
 
     print()
@@ -97,9 +102,6 @@ def wake():
         "AUDIO BYTES:",
         len(audio_data)
     )
-
-    # Current wake test:
-    # every wake request activates the device.
 
     response_data = {
         "status": "ok",
@@ -122,10 +124,7 @@ def wake():
 # TEST
 # =====================================================
 
-@app.route(
-    "/test",
-    methods=["POST"]
-)
+@app.route("/test", methods=["POST"])
 def test():
 
     data = request.get_json(
@@ -453,7 +452,7 @@ Determine the intended meaning and answer naturally.
 
 
 # =====================================================
-# TTS
+# TTS - FEMALE HANNAH
 # =====================================================
 
 def generate_tts(text):
@@ -471,7 +470,10 @@ def generate_tts(text):
 
         return None
 
-    # Keep within Orpheus input limit.
+    # =================================================
+    # LIMIT TEXT
+    # =================================================
+
     if len(text) > TTS_MAX_CHARS:
 
         text = text[
@@ -486,11 +488,20 @@ def generate_tts(text):
                 :last_dot + 1
             ]
 
+    # =================================================
+    # TTS PAYLOAD
+    # =================================================
+
     payload = {
         "model": TTS_MODEL,
+
+        # FEMALE VOICE
         "voice": TTS_VOICE,
+
         "input": text,
+
         "response_format": "wav",
+
         "sample_rate": 16000
     }
 
@@ -515,6 +526,16 @@ def generate_tts(text):
         print(
             "TEXT:",
             text
+        )
+
+        print(
+            "TTS MODEL:",
+            TTS_MODEL
+        )
+
+        print(
+            "TTS VOICE:",
+            TTS_VOICE
         )
 
         response = requests.post(
@@ -558,6 +579,11 @@ def generate_tts(text):
         print(
             "TTS AUDIO BYTES:",
             len(audio_data)
+        )
+
+        print(
+            "VOICE USED:",
+            TTS_VOICE
         )
 
         print(
@@ -622,6 +648,16 @@ def tts():
                 "message": "No text received"
             }), 400
 
+        print()
+        print("========================================")
+        print("TTS ENDPOINT")
+        print("========================================")
+
+        print(
+            "TEXT RECEIVED:",
+            text
+        )
+
         audio_data = generate_tts(
             text
         )
@@ -639,7 +675,10 @@ def tts():
             mimetype="audio/wav",
             headers={
                 "Cache-Control":
-                    "no-cache"
+                    "no-cache",
+
+                "Content-Disposition":
+                    "inline; filename=voice.wav"
             }
         )
 
@@ -733,7 +772,7 @@ def upload_audio():
         )
 
         # =================================================
-        # SPEECH
+        # SPEECH RECOGNITION
         # =================================================
 
         recognizer = sr.Recognizer()
@@ -851,11 +890,15 @@ def upload_audio():
                 "status": "error",
                 "message":
                     "Speech not understood",
+
                 "transcription": None,
+
                 "hindi_transcription":
                     hindi_text,
+
                 "english_transcription":
                     english_text,
+
                 "ai_reply":
                     "Please ask your question again."
             }), 400
@@ -893,14 +936,21 @@ def upload_audio():
 
         response_data = {
             "status": "ok",
+
             "transcription":
                 transcription,
+
             "hindi_transcription":
                 hindi_text,
+
             "english_transcription":
                 english_text,
+
             "ai_reply":
-                ai_reply
+                ai_reply,
+
+            "tts_voice":
+                TTS_VOICE
         }
 
         print()
@@ -955,6 +1005,7 @@ def upload_audio():
                     )
 
             except Exception:
+
                 pass
 
 
@@ -994,6 +1045,11 @@ if __name__ == "__main__":
     print(
         "TTS VOICE:",
         TTS_VOICE
+    )
+
+    print(
+        "VOICE TYPE:",
+        "FEMALE"
     )
 
     print(
