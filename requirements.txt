@@ -1,6 +1,5 @@
 Flask
 gunicorn
-SpeechRecognition
-gTTS
-groq
 requests
+SpeechRecognition
+google-cloud-texttospeech
