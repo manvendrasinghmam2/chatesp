@@ -40,9 +40,10 @@ TTS_MODEL = os.environ.get(
     "canopylabs/orpheus-v1-english"
 )
 
+# UPDATED: TROY -> DIANA
 TTS_VOICE = os.environ.get(
     "TTS_VOICE",
-    "troy"
+    "Diana"
 )
 
 TTS_MAX_CHARS = 200
@@ -97,9 +98,6 @@ def wake():
         "AUDIO BYTES:",
         len(audio_data)
     )
-
-    # Current wake test:
-    # every wake request activates the device.
 
     response_data = {
         "status": "ok",
@@ -471,7 +469,6 @@ def generate_tts(text):
 
         return None
 
-    # Keep within Orpheus input limit.
     if len(text) > TTS_MAX_CHARS:
 
         text = text[
@@ -515,6 +512,11 @@ def generate_tts(text):
         print(
             "TEXT:",
             text
+        )
+
+        print(
+            "VOICE:",
+            TTS_VOICE
         )
 
         response = requests.post(
@@ -708,10 +710,6 @@ def upload_audio():
                     "Please ask your question again."
             }), 400
 
-        # =================================================
-        # SAVE WAV
-        # =================================================
-
         fd, filename = tempfile.mkstemp(
             suffix=".wav"
         )
@@ -731,10 +729,6 @@ def upload_audio():
             "WAV FILE:",
             filename
         )
-
-        # =================================================
-        # SPEECH
-        # =================================================
 
         recognizer = sr.Recognizer()
 
