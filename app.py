@@ -1,12 +1,11 @@
 from flask import Flask, request, jsonify
-import os
-import tempfile
-import speech_recognition as sr
 from groq import Groq
+import os
+import io
+import wave
+import tempfile
 
 app = Flask(__name__)
-
-app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 
 # ============================================================
 # GROQ
@@ -14,22 +13,20 @@ app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-groq_client = None
-
-if GROQ_API_KEY:
-    groq_client = Groq(api_key=GROQ_API_KEY)
-    print("Groq client initialized")
+if not GROQ_API_KEY:
+    print("WARNING: GROQ_API_KEY NOT SET")
+    client = None
 else:
-    print("WARNING: GROQ_API_KEY not found")
+    client = Groq(api_key=GROQ_API_KEY)
+    print("Groq client initialized")
 
 
 # ============================================================
 # HOME
 # ============================================================
 
-@app.route("/", methods=["GET"])
+@app.route("/")
 def home():
-
     return "ESP32 AI SERVER OK", 200
 
 
@@ -37,116 +34,92 @@ def home():
 # HEALTH
 # ============================================================
 
-@app.route("/health", methods=["GET"])
+@app.route("/health")
 def health():
 
     return jsonify({
         "status": "online",
-        "upload_test": "enabled",
-        "ai_engine": "Groq",
-        "model": "openai/gpt-oss-20b",
-        "speech_engine": "Google Speech Recognition",
-        "tts": "Google TTS"
+        "groq": client is not None,
+        "upload": "enabled",
+        "stt": "whisper-large-v3-turbo",
+        "ai": "llama-3.3-70b-versatile"
     }), 200
 
 
 # ============================================================
-# AI
+# TTS
+# Keep your existing TTS route if you already have one.
 # ============================================================
 
-def ask_groq(text):
+@app.route("/tts")
+def tts():
 
-    if not groq_client:
-        raise Exception("GROQ_API_KEY missing")
+    text = request.args.get("text", "")
+    lang = request.args.get("lang", "en")
 
-    print("================================")
-    print("GROQ AI")
-    print("================================")
+    if not text:
+        return jsonify({
+            "error": "text missing"
+        }), 400
 
-    print("USER:", text)
+    print("TTS REQUEST")
+    print("TEXT:", text)
+    print("LANG:", lang)
 
-    response = groq_client.chat.completions.create(
+    # --------------------------------------------------------
+    # IMPORTANT:
+    # Put your existing working TTS code here.
+    # This route is NOT changed by upload/STT.
+    # --------------------------------------------------------
 
-        model="openai/gpt-oss-20b",
-
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a helpful voice assistant. "
-                    "Reply naturally and concisely. "
-                    "If the user speaks Hindi, reply in Hindi. "
-                    "If the user speaks English, reply in English."
-                )
-            },
-            {
-                "role": "user",
-                "content": text
-            }
-        ],
-
-        max_completion_tokens=300
-    )
-
-    answer = response.choices[0].message.content
-
-    print("AI:", answer)
-
-    return answer
+    return jsonify({
+        "status": "ok",
+        "text": text,
+        "lang": lang
+    }), 200
 
 
 # ============================================================
-# SPEECH TO TEXT
+# VALIDATE WAV
 # ============================================================
 
-def speech_to_text(audio_data):
-
-    print("================================")
-    print("SPEECH TO TEXT")
-    print("================================")
-
-    recognizer = sr.Recognizer()
-
-    temp_path = None
+def check_wav(data):
 
     try:
 
-        # Temporary WAV file
-        with tempfile.NamedTemporaryFile(
-            suffix=".wav",
-            delete=False
-        ) as f:
+        bio = io.BytesIO(data)
 
-            f.write(audio_data)
+        with wave.open(bio, "rb") as wav:
 
-            temp_path = f.name
+            channels = wav.getnchannels()
+            sample_width = wav.getsampwidth()
+            sample_rate = wav.getframerate()
+            frames = wav.getnframes()
 
-        print("TEMP WAV:", temp_path)
-        print("AUDIO BYTES:", len(audio_data))
+            duration = frames / float(sample_rate)
 
-        with sr.AudioFile(temp_path) as source:
+            print("--------------------------------")
+            print("WAV INFO")
+            print("Channels:", channels)
+            print("Sample Width:", sample_width)
+            print("Sample Rate:", sample_rate)
+            print("Frames:", frames)
+            print("Duration:", duration)
+            print("--------------------------------")
 
-            audio = recognizer.record(source)
+            return {
+                "channels": channels,
+                "sample_width": sample_width,
+                "sample_rate": sample_rate,
+                "frames": frames,
+                "duration": duration
+            }
 
-        print("Sending audio to Google Speech Recognition...")
+    except Exception as e:
 
-        text = recognizer.recognize_google(
-            audio,
-            language="hi-IN"
-        )
+        print("WAV VALIDATION ERROR:", repr(e))
 
-        print("RECOGNIZED TEXT:", text)
-
-        return text
-
-    finally:
-
-        if temp_path:
-
-            try:
-                os.remove(temp_path)
-            except:
-                pass
+        return None
 
 
 # ============================================================
@@ -157,13 +130,9 @@ def speech_to_text(audio_data):
 def upload_audio():
 
     print()
-    print("################################")
+    print("================================")
     print("UPLOAD AUDIO REQUEST")
-    print("################################")
-
-    print("METHOD:", request.method)
-    print("CONTENT TYPE:", request.content_type)
-    print("CONTENT LENGTH:", request.content_length)
+    print("================================")
 
     try:
 
@@ -171,134 +140,252 @@ def upload_audio():
         # READ AUDIO
         # ----------------------------------------------------
 
-        data = request.get_data(
-            cache=False,
-            as_text=False
-        )
+        data = request.get_data()
 
-        size = len(data)
+        print("Content-Type:", request.content_type)
+        print("Content-Length:", request.content_length)
+        print("AUDIO BYTES:", len(data))
 
-        print("AUDIO RECEIVED")
-        print("BYTES:", size)
-
-        if size == 0:
+        if not data:
 
             return jsonify({
                 "status": "error",
-                "message": "Empty audio",
-                "bytes": 0
-            }), 400
-
-
-        # ----------------------------------------------------
-        # WAV CHECK
-        # ----------------------------------------------------
-
-        if size < 12:
-
-            return jsonify({
-                "status": "error",
-                "message": "Audio too small",
-                "bytes": size
-            }), 400
-
-
-        riff = data[0:4]
-        wave = data[8:12]
-
-        print("RIFF:", riff)
-        print("WAVE:", wave)
-
-        if riff != b"RIFF" or wave != b"WAVE":
-
-            print("WARNING: Invalid WAV header")
-
-
-        # ----------------------------------------------------
-        # SPEECH TO TEXT
-        # ----------------------------------------------------
-
-        try:
-
-            user_text = speech_to_text(data)
-
-        except sr.UnknownValueError:
-
-            print("SPEECH NOT UNDERSTOOD")
-
-            return jsonify({
-                "status": "ok",
-                "message": "Audio received but speech not understood",
-                "bytes": size,
+                "message": "No audio received",
                 "text": "",
                 "ai_response": ""
-            }), 200
-
-        except sr.RequestError as e:
-
-            print("GOOGLE SPEECH ERROR:", repr(e))
-
-            return jsonify({
-                "status": "error",
-                "message": "Speech recognition service failed",
-                "error": str(e)
-            }), 502
+            }), 400
 
 
         # ----------------------------------------------------
-        # GROQ
+        # CHECK WAV
         # ----------------------------------------------------
 
-        try:
+        wav_info = check_wav(data)
 
-            ai_response = ask_groq(user_text)
-
-        except Exception as e:
-
-            print("GROQ ERROR:", repr(e))
+        if wav_info is None:
 
             return jsonify({
                 "status": "error",
-                "message": "Groq AI failed",
-                "text": user_text,
-                "error": str(e)
+                "message": "Invalid WAV file",
+                "text": "",
+                "ai_response": ""
+            }), 400
+
+
+        # ----------------------------------------------------
+        # BASIC WAV CHECK
+        # ----------------------------------------------------
+
+        print("WAV CHECK PASSED")
+
+        print(
+            "Format:",
+            wav_info["channels"],
+            "channel(s),",
+            wav_info["sample_rate"],
+            "Hz,",
+            wav_info["sample_width"] * 8,
+            "bit"
+        )
+
+
+        # ----------------------------------------------------
+        # GROQ CHECK
+        # ----------------------------------------------------
+
+        if client is None:
+
+            return jsonify({
+                "status": "error",
+                "message": "GROQ_API_KEY is missing",
+                "text": "",
+                "ai_response": ""
             }), 500
 
 
         # ----------------------------------------------------
-        # FINAL RESPONSE
+        # SAVE TEMP WAV
         # ----------------------------------------------------
 
-        print()
-        print("################################")
-        print("AI PIPELINE SUCCESS")
-        print("################################")
+        temp_file = tempfile.NamedTemporaryFile(
+            suffix=".wav",
+            delete=False
+        )
 
-        print("TEXT:", user_text)
-        print("AI:", ai_response)
-        print("BYTES:", size)
+        temp_path = temp_file.name
 
-        return jsonify({
+        try:
 
-            "status": "ok",
+            temp_file.write(data)
+            temp_file.flush()
+            temp_file.close()
 
-            "message": "Audio processed",
+            print("TEMP WAV:", temp_path)
 
-            "bytes": size,
 
-            "text": user_text,
+            # =================================================
+            # SPEECH TO TEXT
+            # =================================================
 
-            "ai_response": ai_response
+            print()
+            print("================================")
+            print("GROQ WHISPER")
+            print("================================")
 
-        }), 200
+            print("Starting transcription...")
+
+            with open(temp_path, "rb") as audio_file:
+
+                transcription = client.audio.transcriptions.create(
+
+                    file=audio_file,
+
+                    model="whisper-large-v3-turbo",
+
+                    # Hindi + English mixed speech
+                    prompt=(
+                        "The speaker may speak Hindi, English, "
+                        "or Hinglish. Transcribe exactly what "
+                        "the speaker says."
+                    ),
+
+                    response_format="json",
+
+                    temperature=0.0
+                )
+
+
+            user_text = transcription.text.strip()
+
+
+            print("TRANSCRIPTION:")
+            print(user_text)
+
+
+            # =================================================
+            # EMPTY SPEECH
+            # =================================================
+
+            if not user_text:
+
+                print("NO SPEECH DETECTED")
+
+                return jsonify({
+
+                    "status": "ok",
+
+                    "bytes": len(data),
+
+                    "message": "Audio received but speech not understood",
+
+                    "text": "",
+
+                    "ai_response": ""
+
+                }), 200
+
+
+            # =================================================
+            # AI
+            # =================================================
+
+            print()
+            print("================================")
+            print("GROQ AI")
+            print("================================")
+
+            print("USER:", user_text)
+
+
+            completion = client.chat.completions.create(
+
+                model="llama-3.3-70b-versatile",
+
+                messages=[
+
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a helpful voice assistant. "
+                            "The user may speak Hindi, English, "
+                            "or Hinglish. Understand all three. "
+                            "Reply naturally and concisely. "
+                            "If the user speaks Hindi or Hinglish, "
+                            "you may reply in Hindi/Hinglish. "
+                            "Do not use markdown. "
+                            "Keep voice responses short."
+                        )
+                    },
+
+                    {
+                        "role": "user",
+                        "content": user_text
+                    }
+
+                ],
+
+                temperature=0.3,
+
+                max_tokens=300
+            )
+
+
+            ai_response = (
+                completion
+                .choices[0]
+                .message
+                .content
+                .strip()
+            )
+
+
+            print("AI RESPONSE:")
+            print(ai_response)
+
+
+            # =================================================
+            # FINAL RESPONSE
+            # =================================================
+
+            print()
+            print("================================")
+            print("AI PIPELINE SUCCESS")
+            print("================================")
+
+            return jsonify({
+
+                "status": "ok",
+
+                "bytes": len(data),
+
+                "message": "Audio processed successfully",
+
+                "text": user_text,
+
+                "ai_response": ai_response
+
+            }), 200
+
+
+        finally:
+
+            # ------------------------------------------------
+            # DELETE TEMP FILE
+            # ------------------------------------------------
+
+            try:
+                os.remove(temp_path)
+                print("TEMP FILE DELETED")
+            except Exception:
+                pass
 
 
     except Exception as e:
 
         print()
-        print("################################")
-        print("UPLOAD ERROR")
-        print("################################")
+        print("================================")
+        print("UPLOAD / AI ERROR")
+        print("================================")
 
         print(repr(e))
 
@@ -308,29 +395,17 @@ def upload_audio():
 
             "message": "Audio processing failed",
 
-            "error": str(e)
+            "error": str(e),
+
+            "text": "",
+
+            "ai_response": ""
 
         }), 500
 
 
 # ============================================================
-# ERROR 413
-# ============================================================
-
-@app.errorhandler(413)
-def too_large(error):
-
-    return jsonify({
-
-        "status": "error",
-
-        "message": "Audio file too large"
-
-    }), 413
-
-
-# ============================================================
-# MAIN
+# START
 # ============================================================
 
 if __name__ == "__main__":
@@ -343,9 +418,6 @@ if __name__ == "__main__":
     )
 
     app.run(
-
         host="0.0.0.0",
-
         port=port
-
     )
