@@ -9,27 +9,25 @@ from gtts import gTTS
 from groq import Groq
 
 
+# ============================================================
+# APP
+# ============================================================
+
 app = Flask(__name__)
+
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
+
 
 # ============================================================
 # CONFIG
 # ============================================================
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY") or os.environ.get("AI_API_KEY")
+AI_API_KEY = os.environ.get("AI_API_KEY", "").strip()
 
 AI_MODEL = os.environ.get(
     "AI_MODEL",
     "openai/gpt-oss-20b"
 )
-
-PORT = int(
-    os.environ.get(
-        "PORT",
-        "10000"
-    )
-)
-
-app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024
 
 
 # ============================================================
@@ -38,22 +36,19 @@ app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024
 
 groq_client = None
 
-if GROQ_API_KEY:
+if AI_API_KEY:
     try:
         groq_client = Groq(
-            api_key=GROQ_API_KEY
+            api_key=AI_API_KEY
         )
 
-        print("================================")
-        print("GROQ INITIALIZED")
-        print("MODEL:", AI_MODEL)
-        print("================================")
+        print("Groq client initialized")
 
     except Exception as e:
-        print("GROQ INIT ERROR:", str(e))
+        print("Groq initialization error:", e)
 
 else:
-    print("WARNING: GROQ_API_KEY / AI_API_KEY NOT SET")
+    print("WARNING: AI_API_KEY is missing")
 
 
 # ============================================================
@@ -61,7 +56,6 @@ else:
 # ============================================================
 
 def clean_text(text):
-
     if not text:
         return ""
 
@@ -77,11 +71,10 @@ def clean_text(text):
 
 
 def valid_text(text):
-
     if not text:
         return False
 
-    text = str(text).strip()
+    text = clean_text(text)
 
     if len(text) < 2:
         return False
@@ -95,23 +88,17 @@ def valid_text(text):
         "speech not understood"
     }
 
-    if text.lower() in bad:
-        return False
-
-    return True
+    return text.lower() not in bad
 
 
 def contains_hindi(text):
-
     if not text:
         return False
 
-    for ch in str(text):
-
-        if "\u0900" <= ch <= "\u097F":
-            return True
-
-    return False
+    return any(
+        "\u0900" <= c <= "\u097F"
+        for c in str(text)
+    )
 
 
 # ============================================================
@@ -123,36 +110,17 @@ def detect_language(
     hindi_text,
     english_text
 ):
+    reply = clean_text(reply)
 
-    reply = reply or ""
-
-    # Devanagari
     if contains_hindi(reply):
         return "hi"
 
-    # English only
-    if (
-        valid_text(english_text)
-        and
-        not valid_text(hindi_text)
-    ):
-        return "en"
-
-    # Hindi only
-    if (
-        valid_text(hindi_text)
-        and
-        not valid_text(english_text)
-    ):
-        return "hi"
-
-    # Roman Hindi / Hinglish
-    hindi_words = [
+    roman_hindi = [
         "kya",
         "hai",
         "kaise",
-        "kaisa",
         "aap",
+        "ap",
         "mujhe",
         "mera",
         "meri",
@@ -173,19 +141,30 @@ def detect_language(
         "karna"
     ]
 
-    lower = reply.lower()
+    low = reply.lower()
 
     matches = 0
 
-    for word in hindi_words:
-
+    for word in roman_hindi:
         if re.search(
             r"\b" + re.escape(word) + r"\b",
-            lower
+            low
         ):
             matches += 1
 
     if matches >= 2:
+        return "hi"
+
+    if (
+        valid_text(english_text)
+        and not valid_text(hindi_text)
+    ):
+        return "en"
+
+    if (
+        valid_text(hindi_text)
+        and not valid_text(english_text)
+    ):
         return "hi"
 
     return "en"
@@ -195,45 +174,26 @@ def detect_language(
 # HOME
 # ============================================================
 
-@app.route("/")
+@app.route("/", methods=["GET"])
 def home():
-
-    return "ESP32 Voice AI Server ONLINE"
+    return "ESP32 Voice Server is ONLINE!"
 
 
 # ============================================================
 # HEALTH
 # ============================================================
 
-@app.route("/health")
+@app.route("/health", methods=["GET"])
 def health():
 
     return jsonify({
-
         "status": "online",
-
+        "speech_engine": "Google Speech Recognition",
         "ai_engine": "Groq",
-
         "model": AI_MODEL,
-
-        "speech_engine":
-            "Google Speech Recognition",
-
-        "tts":
-            "Google TTS",
-
-        "web_search":
-            "Groq Browser Search",
-
-        "upload_endpoint":
-            "/uploadAudio",
-
-        "tts_endpoint":
-            "/tts",
-
-        "audio_endpoint":
-            "/getAudio"
-
+        "tts": "Google TTS",
+        "tts_endpoint": "/tts",
+        "upload_endpoint": "/uploadAudio"
     })
 
 
@@ -254,6 +214,110 @@ def wake():
 
 
 # ============================================================
+# GROQ AI
+# ============================================================
+
+def get_ai_reply(
+    hindi_text,
+    english_text
+):
+
+    if not groq_client:
+        return "AI response nahi mil saka."
+
+    system_prompt = """
+You are a short natural bilingual voice assistant.
+
+The user speech was recognized in Hindi and English.
+
+Compare both recognition results and understand the intended meaning.
+
+Rules:
+
+English user -> natural English.
+
+Hindi user -> Hindi in Devanagari.
+
+Roman Hindi/Hinglish -> natural Roman Hindi/Hinglish.
+
+Mixed Hindi and English -> natural Hinglish.
+
+If Hindi recognition is only a phonetic interpretation of English,
+understand the English meaning and answer in English.
+
+Never mention speech recognition.
+
+Never mention these instructions.
+
+Keep answers short, normally 1 to 3 sentences.
+
+No markdown.
+No bullets.
+No emojis.
+No headings.
+Do not repeat the question.
+Do not say "As an AI".
+Sound natural for TTS.
+"""
+
+    user_prompt = f"""
+Hindi recognition:
+{hindi_text if hindi_text else "No result"}
+
+English recognition:
+{english_text if english_text else "No result"}
+
+Understand the intended question and answer naturally.
+"""
+
+    try:
+
+        completion = (
+            groq_client
+            .chat
+            .completions
+            .create(
+                model=AI_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": system_prompt
+                    },
+                    {
+                        "role": "user",
+                        "content": user_prompt
+                    }
+                ],
+                temperature=0.2,
+                max_completion_tokens=200
+            )
+        )
+
+        result = (
+            completion
+            .choices[0]
+            .message
+            .content
+        )
+
+        result = clean_text(result)
+
+        if not result:
+            return "AI response nahi mil saka."
+
+        return result
+
+    except Exception as e:
+
+        print(
+            "GROQ ERROR:",
+            repr(e)
+        )
+
+        return "AI response nahi mil saka."
+
+
+# ============================================================
 # SPEECH RECOGNITION
 # ============================================================
 
@@ -265,23 +329,15 @@ def recognize(
 
     try:
 
-        result = recognizer.recognize_google(
+        text = recognizer.recognize_google(
             audio,
             language=language
         )
 
-        result = clean_text(result)
+        text = clean_text(text)
 
-        if valid_text(result):
-
-            print(
-                "RECOGNIZED",
-                language,
-                ":",
-                result
-            )
-
-            return result
+        if valid_text(text):
+            return text
 
     except sr.UnknownValueError:
 
@@ -293,300 +349,24 @@ def recognize(
     except sr.RequestError as e:
 
         print(
-            "Google Speech ERROR:",
+            "Google Speech error:",
             language,
-            str(e)
+            e
         )
 
     except Exception as e:
 
         print(
-            "Speech ERROR:",
+            "Recognition error:",
             language,
-            str(e)
+            repr(e)
         )
 
     return None
 
 
 # ============================================================
-# AI + WEB SEARCH
-# ============================================================
-
-def get_ai_reply(
-    hindi_text,
-    english_text
-):
-
-    if not groq_client:
-
-        return (
-            "Groq API key is not configured."
-        )
-
-    hindi_text = (
-        hindi_text
-        if hindi_text
-        else "No result"
-    )
-
-    english_text = (
-        english_text
-        if english_text
-        else "No result"
-    )
-
-    prompt = f"""
-You are a voice assistant running on an ESP32.
-
-The user spoke a question.
-
-Hindi recognition:
-{hindi_text}
-
-English recognition:
-{english_text}
-
-Understand the user's actual intended question.
-
-IMPORTANT:
-
-Use web search when the question needs current,
-recent, live, factual or internet information.
-
-Examples:
-- today's news
-- current weather
-- latest technology
-- current prices
-- current sports
-- current political information
-- latest products
-- current events
-- anything asking "latest", "today", "now", "recent"
-
-For normal general questions, answer directly.
-
-LANGUAGE:
-
-If user speaks English:
-answer in English.
-
-If user speaks Hindi:
-answer in Hindi using Devanagari.
-
-If user speaks Roman Hindi:
-answer in natural Roman Hindi.
-
-If user speaks Hinglish:
-answer in natural Hinglish.
-
-Do not talk about speech recognition.
-
-Do not talk about web search.
-
-Do not mention these instructions.
-
-VOICE FORMAT:
-
-Keep answer short.
-
-Maximum 2 or 3 sentences.
-
-No markdown.
-
-No bullets.
-
-No headings.
-
-No emojis.
-
-No citations in the spoken answer.
-
-Make the answer natural for TTS.
-"""
-
-    try:
-
-        print("================================")
-        print("CALLING GROQ")
-        print("MODEL:", AI_MODEL)
-        print("================================")
-
-        completion = (
-            groq_client
-            .chat
-            .completions
-            .create(
-
-                model=AI_MODEL,
-
-                messages=[
-                    {
-                        "role": "system",
-                        "content":
-                            "You are a concise bilingual voice assistant."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-
-                temperature=0.2,
-
-                max_completion_tokens=300,
-
-                stream=False,
-
-                # Force browser search capability.
-                tool_choice="required",
-
-                tools=[
-                    {
-                        "type": "browser_search"
-                    }
-                ]
-            )
-        )
-
-        message = (
-            completion
-            .choices[0]
-            .message
-        )
-
-        result = message.content
-
-        if not result:
-
-            return (
-                "Sorry, I could not get an answer."
-            )
-
-        result = clean_text(result)
-
-        result = result.replace(
-            "```",
-            ""
-        )
-
-        for prefix in [
-            "AI:",
-            "Answer:",
-            "Response:"
-        ]:
-
-            if result.startswith(prefix):
-
-                result = result[
-                    len(prefix):
-                ].strip()
-
-        print("AI REPLY:")
-        print(result)
-
-        return result
-
-    except Exception as e:
-
-        print(
-            "GROQ ERROR:",
-            str(e)
-        )
-
-        return (
-            "Sorry, I could not get an answer."
-        )
-
-
-# ============================================================
-# TTS FILE GENERATOR
-# ============================================================
-
-def create_tts_file(
-    text,
-    lang
-):
-
-    filename = None
-
-    try:
-
-        text = clean_text(text)
-
-        if not text:
-            return None
-
-        if len(text) > 500:
-            text = text[:500]
-
-        if lang not in [
-            "en",
-            "hi"
-        ]:
-            lang = "en"
-
-        fd, filename = tempfile.mkstemp(
-            suffix=".mp3"
-        )
-
-        os.close(fd)
-
-        print(
-            "GENERATING TTS:",
-            lang
-        )
-
-        engine = gTTS(
-            text=text,
-            lang=lang,
-            slow=False
-        )
-
-        engine.save(filename)
-
-        if not os.path.exists(filename):
-            raise RuntimeError(
-                "TTS file not created"
-            )
-
-        size = os.path.getsize(filename)
-
-        print(
-            "TTS SIZE:",
-            size
-        )
-
-        if size < 100:
-            raise RuntimeError(
-                "TTS file too small"
-            )
-
-        return filename
-
-    except Exception as e:
-
-        print(
-            "TTS ERROR:",
-            str(e)
-        )
-
-        if filename:
-
-            try:
-
-                if os.path.exists(filename):
-                    os.remove(filename)
-
-            except:
-                pass
-
-        return None
-
-
-# ============================================================
-# TTS ENDPOINT
+# TTS
 # ============================================================
 
 @app.route(
@@ -614,57 +394,94 @@ def tts():
             "message": "No text"
         }), 400
 
-    filename = create_tts_file(
-        text,
-        lang
-    )
+    if len(text) > 400:
+        text = text[:400]
 
-    if not filename:
+    if lang not in ["en", "hi"]:
+        lang = "en"
 
-        return jsonify({
-            "status": "error",
-            "message": "TTS failed"
-        }), 500
+    filename = None
 
     try:
+
+        fd, filename = tempfile.mkstemp(
+            suffix=".mp3"
+        )
+
+        os.close(fd)
+
+        print(
+            "TTS:",
+            lang,
+            text
+        )
+
+        engine = gTTS(
+            text=text,
+            lang=lang,
+            slow=False
+        )
+
+        engine.save(filename)
+
+        if not os.path.exists(filename):
+            raise RuntimeError(
+                "TTS file not created"
+            )
+
+        if os.path.getsize(filename) < 100:
+            raise RuntimeError(
+                "TTS file empty"
+            )
 
         response = send_file(
             filename,
             mimetype="audio/mpeg",
             as_attachment=False,
-            download_name="reply.mp3"
+            download_name="tts.mp3"
         )
 
-        response.headers[
-            "Cache-Control"
-        ] = "no-cache, no-store, must-revalidate"
+        response.headers["Cache-Control"] = (
+            "no-cache, no-store, must-revalidate"
+        )
+
+        response.headers["Pragma"] = "no-cache"
+
+        response.headers["Content-Disposition"] = (
+            "inline; filename=tts.mp3"
+        )
 
         @response.call_on_close
         def cleanup():
 
             try:
 
-                if os.path.exists(filename):
+                if filename and os.path.exists(filename):
                     os.remove(filename)
 
             except Exception as e:
 
                 print(
-                    "TTS CLEANUP ERROR:",
-                    str(e)
+                    "TTS cleanup:",
+                    e
                 )
 
         return response
 
     except Exception as e:
 
-        try:
+        print(
+            "TTS ERROR:",
+            repr(e)
+        )
 
-            if os.path.exists(filename):
-                os.remove(filename)
+        if filename:
 
-        except:
-            pass
+            try:
+                if os.path.exists(filename):
+                    os.remove(filename)
+            except Exception:
+                pass
 
         return jsonify({
             "status": "error",
@@ -690,7 +507,7 @@ def upload_audio():
 
         print()
         print("================================")
-        print("AUDIO UPLOAD")
+        print("UPLOAD REQUEST RECEIVED")
         print("================================")
 
         audio_data = request.get_data(
@@ -700,7 +517,7 @@ def upload_audio():
         size = len(audio_data)
 
         print(
-            "AUDIO SIZE:",
+            "Audio size:",
             size
         )
 
@@ -709,8 +526,10 @@ def upload_audio():
             return jsonify({
                 "status": "error",
                 "message": "Audio too small",
-                "ai_reply":
-                    "Please speak again."
+                "transcription": None,
+                "hindi_transcription": None,
+                "english_transcription": None,
+                "ai_reply": "Please ask your question again."
             }), 400
 
         # ----------------------------------------------------
@@ -741,17 +560,19 @@ def upload_audio():
 
             header = f.read(44)
 
-        if not (
-            len(header) >= 12
-            and header[0:4] == b"RIFF"
-            and header[8:12] == b"WAVE"
+        if (
+            len(header) < 44
+            or header[0:4] != b"RIFF"
+            or header[8:12] != b"WAVE"
         ):
 
             return jsonify({
                 "status": "error",
                 "message": "Invalid WAV",
-                "ai_reply":
-                    "Invalid audio."
+                "transcription": None,
+                "hindi_transcription": None,
+                "english_transcription": None,
+                "ai_reply": "Invalid audio file."
             }), 400
 
         channels = int.from_bytes(
@@ -780,17 +601,25 @@ def upload_audio():
         )
 
         # ----------------------------------------------------
-        # Speech recognition
+        # Read audio
         # ----------------------------------------------------
 
         recognizer = sr.Recognizer()
+
+        recognizer.energy_threshold = 300
+
+        recognizer.dynamic_energy_threshold = False
 
         with sr.AudioFile(filename) as source:
 
             audio = recognizer.record(source)
 
+        # ----------------------------------------------------
+        # Hindi
+        # ----------------------------------------------------
+
         print(
-            "HINDI RECOGNITION..."
+            "Recognizing Hindi..."
         )
 
         hindi_text = recognize(
@@ -799,8 +628,12 @@ def upload_audio():
             "hi-IN"
         )
 
+        # ----------------------------------------------------
+        # English
+        # ----------------------------------------------------
+
         print(
-            "ENGLISH RECOGNITION..."
+            "Recognizing English..."
         )
 
         english_text = recognize(
@@ -810,14 +643,18 @@ def upload_audio():
         )
 
         print(
-            "HINDI:",
+            "Hindi:",
             hindi_text
         )
 
         print(
-            "ENGLISH:",
+            "English:",
             english_text
         )
+
+        # ----------------------------------------------------
+        # Nothing recognized
+        # ----------------------------------------------------
 
         if (
             not valid_text(hindi_text)
@@ -827,20 +664,20 @@ def upload_audio():
 
             return jsonify({
                 "status": "error",
-                "message":
-                    "Speech not understood",
+                "message": "Speech not understood",
                 "transcription": None,
-                "hindi_transcription":
-                    hindi_text,
-                "english_transcription":
-                    english_text,
-                "ai_reply":
-                    "Please speak again."
+                "hindi_transcription": hindi_text,
+                "english_transcription": english_text,
+                "ai_reply": "Please ask your question again."
             }), 400
 
         # ----------------------------------------------------
         # AI
         # ----------------------------------------------------
+
+        print(
+            "Calling Groq..."
+        )
 
         ai_reply = get_ai_reply(
             hindi_text,
@@ -856,11 +693,8 @@ def upload_audio():
         # ----------------------------------------------------
 
         if valid_text(english_text):
-
             transcription = english_text
-
         else:
-
             transcription = hindi_text
 
         # ----------------------------------------------------
@@ -873,73 +707,49 @@ def upload_audio():
             english_text
         )
 
-        elapsed = (
-            time.time()
-            - started
+        # ----------------------------------------------------
+        # Response
+        # ----------------------------------------------------
+
+        response = {
+            "status": "ok",
+            "transcription": transcription,
+            "hindi_transcription": hindi_text,
+            "english_transcription": english_text,
+            "ai_reply": ai_reply,
+            "reply_lang": reply_lang
+        }
+
+        print(
+            "FINAL:",
+            response
         )
 
-        print()
-        print("================================")
-        print("FINAL")
-        print("================================")
         print(
-            "TRANSCRIPTION:",
-            transcription
-        )
-        print(
-            "AI:",
-            ai_reply
-        )
-        print(
-            "LANG:",
-            reply_lang
-        )
-        print(
-            "TIME:",
-            round(elapsed, 2),
+            "REQUEST TIME:",
+            round(
+                time.time() - started,
+                2
+            ),
             "seconds"
         )
-        print("================================")
 
-        return jsonify({
-
-            "status":
-                "ok",
-
-            "transcription":
-                transcription,
-
-            "hindi_transcription":
-                hindi_text,
-
-            "english_transcription":
-                english_text,
-
-            "ai_reply":
-                ai_reply,
-
-            "reply_lang":
-                reply_lang
-        })
+        return jsonify(response)
 
     except Exception as e:
 
         print(
             "UPLOAD ERROR:",
-            str(e)
+            repr(e)
         )
 
         return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                str(e),
-
-            "ai_reply":
-                "Sorry, something went wrong."
-
+            "status": "error",
+            "message": str(e),
+            "transcription": None,
+            "hindi_transcription": None,
+            "english_transcription": None,
+            "ai_reply": "AI response nahi mil saka."
         }), 500
 
     finally:
@@ -951,39 +761,29 @@ def upload_audio():
                 if os.path.exists(filename):
                     os.remove(filename)
 
-            except Exception as e:
-
-                print(
-                    "WAV CLEANUP ERROR:",
-                    str(e)
-                )
+            except Exception:
+                pass
 
 
 # ============================================================
-# START
+# LOCAL RUN
 # ============================================================
 
 if __name__ == "__main__":
 
-    print()
-    print("================================")
-    print("ESP32 AI VOICE SERVER")
-    print("================================")
-    print(
-        "PORT:",
-        PORT
+    port = int(
+        os.environ.get(
+            "PORT",
+            10000
+        )
     )
+
     print(
-        "MODEL:",
-        AI_MODEL
+        "Starting ESP32 Voice Server..."
     )
-    print(
-        "SEARCH: Groq Browser Search"
-    )
-    print("================================")
 
     app.run(
         host="0.0.0.0",
-        port=PORT,
+        port=port,
         threaded=True
     )
