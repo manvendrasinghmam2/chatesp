@@ -5,12 +5,10 @@ import requests
 import re
 import tempfile
 
-
 app = Flask(__name__)
 
-
 # =====================================================
-# CONFIGURATION
+# CONFIG
 # =====================================================
 
 AI_API_KEY = os.environ.get("AI_API_KEY")
@@ -44,8 +42,6 @@ TTS_VOICE = os.environ.get(
     "troy"
 )
 
-# Keep responses short because current Orpheus
-# documentation limits input to 200 characters.
 TTS_MAX_CHARS = 200
 
 
@@ -113,26 +109,20 @@ def wake():
     )
 
     # -------------------------------------------------
-    # TEMPORARY WAKE TEST
+    # TEST MODE
     #
-    # IMPORTANT:
-    # This still returns TRUE for every request.
-    # Actual HELLO detection is not implemented here.
+    # Every wake request returns true.
     # -------------------------------------------------
 
     response_data = {
 
-        "status":
-            "ok",
+        "status": "ok",
 
-        "wake":
-            True,
+        "wake": True,
 
-        "english":
-            "Hello",
+        "english": "Hello",
 
-        "hindi":
-            None
+        "hindi": None
     }
 
     print(
@@ -142,48 +132,7 @@ def wake():
 
     print("========================================")
 
-    return jsonify(
-        response_data
-    )
-
-
-# =====================================================
-# TEST
-# =====================================================
-
-@app.route(
-    "/test",
-    methods=["POST"]
-)
-def test():
-
-    data = request.get_json(
-        silent=True
-    )
-
-    if not data:
-
-        return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                "No JSON received"
-
-        }), 400
-
-    return jsonify({
-
-        "status":
-            "ok",
-
-        "message":
-            "Data received",
-
-        "data":
-            data
-    })
+    return jsonify(response_data)
 
 
 # =====================================================
@@ -237,7 +186,7 @@ def is_valid_query(text):
 
 
 # =====================================================
-# AI REPLY
+# AI
 # =====================================================
 
 def get_ai_reply(
@@ -338,36 +287,26 @@ Determine the intended meaning and answer naturally.
 
     payload = {
 
-        "model":
-            AI_MODEL,
+        "model": AI_MODEL,
 
         "messages": [
 
             {
-                "role":
-                    "system",
-
-                "content":
-                    system_prompt
+                "role": "system",
+                "content": system_prompt
             },
 
             {
-                "role":
-                    "user",
-
-                "content":
-                    user_content
+                "role": "user",
+                "content": user_content
             }
         ],
 
-        "temperature":
-            0.2,
+        "temperature": 0.2,
 
-        "max_completion_tokens":
-            200,
+        "max_completion_tokens": 200,
 
-        "stream":
-            False
+        "stream": False
     }
 
     headers = {
@@ -390,13 +329,9 @@ Determine the intended meaning and answer naturally.
         print("========================================")
 
         response = requests.post(
-
             AI_URL,
-
             headers=headers,
-
             json=payload,
-
             timeout=35
         )
 
@@ -415,15 +350,7 @@ Determine the intended meaning and answer naturally.
                 "AI response nahi mil saka."
             )
 
-        try:
-
-            data = response.json()
-
-        except Exception:
-
-            return (
-                "AI response nahi mil saka."
-            )
+        data = response.json()
 
         choices = data.get(
             "choices"
@@ -458,7 +385,6 @@ Determine the intended meaning and answer naturally.
         ).strip()
 
         prefixes = [
-
             "AI:",
             "Answer:",
             "Response:"
@@ -466,9 +392,7 @@ Determine the intended meaning and answer naturally.
 
         for prefix in prefixes:
 
-            if reply.startswith(
-                prefix
-            ):
+            if reply.startswith(prefix):
 
                 reply = reply[
                     len(prefix):
@@ -488,18 +412,6 @@ Determine the intended meaning and answer naturally.
 
         return reply
 
-    except requests.exceptions.Timeout:
-
-        return (
-            "AI response nahi mil saka."
-        )
-
-    except requests.exceptions.ConnectionError:
-
-        return (
-            "AI response nahi mil saka."
-        )
-
     except Exception as e:
 
         print(
@@ -516,16 +428,11 @@ Determine the intended meaning and answer naturally.
 # TTS
 # =====================================================
 
-def generate_tts(
-    text
-):
+def generate_tts(text):
 
-    text = clean_text(
-        text
-    )
+    text = clean_text(text)
 
     if not text:
-
         return None
 
     if not AI_API_KEY:
@@ -536,17 +443,10 @@ def generate_tts(
 
         return None
 
-    # -------------------------------------------------
-    # CURRENT GROQ ORPHEUS LIMIT
-    # -------------------------------------------------
-
     if len(text) > TTS_MAX_CHARS:
 
-        text = text[
-            :TTS_MAX_CHARS
-        ]
+        text = text[:TTS_MAX_CHARS]
 
-        # Try to end at a sentence.
         last_dot = text.rfind(".")
 
         if last_dot > 40:
@@ -598,13 +498,9 @@ def generate_tts(
         )
 
         response = requests.post(
-
             TTS_URL,
-
             headers=headers,
-
             json=payload,
-
             timeout=35
         )
 
@@ -622,8 +518,6 @@ def generate_tts(
             print(
                 response.text[:2000]
             )
-
-            print("========================================")
 
             return None
 
@@ -645,22 +539,6 @@ def generate_tts(
         print("========================================")
 
         return audio_data
-
-    except requests.exceptions.Timeout:
-
-        print(
-            "TTS TIMEOUT"
-        )
-
-        return None
-
-    except requests.exceptions.ConnectionError:
-
-        print(
-            "TTS CONNECTION ERROR"
-        )
-
-        return None
 
     except Exception as e:
 
@@ -845,17 +723,10 @@ def upload_audio():
             "wb"
         ) as f:
 
-            f.write(
-                audio_data
-            )
-
-        print(
-            "WAV FILE:",
-            filename
-        )
+            f.write(audio_data)
 
         # -------------------------------------------------
-        # SPEECH RECOGNIZER
+        # SPEECH
         # -------------------------------------------------
 
         recognizer = sr.Recognizer()
@@ -881,9 +752,7 @@ def upload_audio():
         try:
 
             hindi_text = recognizer.recognize_google(
-
                 audio,
-
                 language="hi-IN"
             )
 
@@ -932,9 +801,7 @@ def upload_audio():
         try:
 
             english_text = recognizer.recognize_google(
-
                 audio,
-
                 language="en-IN"
             )
 
@@ -984,13 +851,9 @@ def upload_audio():
         # =================================================
 
         if (
-
             not is_valid_query(hindi_text)
-
             and
-
             not is_valid_query(english_text)
-
         ):
 
             return jsonify({
@@ -1020,9 +883,7 @@ def upload_audio():
         # =================================================
 
         ai_reply = get_ai_reply(
-
             hindi_text,
-
             english_text
         )
 
@@ -1045,7 +906,7 @@ def upload_audio():
             )
 
         # =================================================
-        # FINAL RESPONSE
+        # RESPONSE
         # =================================================
 
         response_data = {
@@ -1085,6 +946,7 @@ def upload_audio():
 
         print()
         print("SERVER ERROR")
+
         print(
             type(e).__name__,
             str(e)
@@ -1132,13 +994,12 @@ def upload_audio():
 
 
 # =====================================================
-# START SERVER
+# START
 # =====================================================
 
 if __name__ == "__main__":
 
     port = int(
-
         os.environ.get(
             "PORT",
             10000
@@ -1180,10 +1041,7 @@ if __name__ == "__main__":
     print("========================================")
 
     app.run(
-
         host="0.0.0.0",
-
         port=port,
-
         threaded=True
     )
