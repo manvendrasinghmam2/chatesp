@@ -40,10 +40,10 @@ TTS_MODEL = os.environ.get(
     "canopylabs/orpheus-v1-english"
 )
 
-# UPDATED: TROY -> DIANA
+# Groq Orpheus English female voice
 TTS_VOICE = os.environ.get(
     "TTS_VOICE",
-    "Diana"
+    "hannah"
 )
 
 TTS_MAX_CHARS = 200
@@ -469,6 +469,7 @@ def generate_tts(text):
 
         return None
 
+    # Groq Orpheus input limit = 200 chars
     if len(text) > TTS_MAX_CHARS:
 
         text = text[
@@ -510,8 +511,8 @@ def generate_tts(text):
         print("========================================")
 
         print(
-            "TEXT:",
-            text
+            "MODEL:",
+            TTS_MODEL
         )
 
         print(
@@ -519,11 +520,16 @@ def generate_tts(text):
             TTS_VOICE
         )
 
+        print(
+            "TEXT:",
+            text
+        )
+
         response = requests.post(
             TTS_URL,
             headers=headers,
             json=payload,
-            timeout=35
+            timeout=60
         )
 
         print(
@@ -531,21 +537,34 @@ def generate_tts(text):
             response.status_code
         )
 
+        # =================================================
+        # ERROR
+        # =================================================
+
         if response.status_code != 200:
 
             print(
-                "TTS ERROR:"
+                "TTS ERROR BODY:"
             )
 
-            print(
-                response.text[:2000]
-            )
+            try:
+                print(
+                    response.json()
+                )
+            except Exception:
+                print(
+                    response.text[:3000]
+                )
 
             print(
                 "========================================"
             )
 
             return None
+
+        # =================================================
+        # AUDIO
+        # =================================================
 
         audio_data = response.content
 
@@ -557,9 +576,41 @@ def generate_tts(text):
 
             return None
 
+        # =================================================
+        # CHECK WAV
+        # =================================================
+
+        if len(audio_data) < 12:
+
+            print(
+                "TTS audio too small"
+            )
+
+            return None
+
+        if (
+            audio_data[0:4] != b"RIFF"
+            or
+            audio_data[8:12] != b"WAVE"
+        ):
+
+            print(
+                "TTS returned non-WAV data"
+            )
+
+            print(
+                audio_data[:100]
+            )
+
+            return None
+
         print(
             "TTS AUDIO BYTES:",
             len(audio_data)
+        )
+
+        print(
+            "TTS WAV: VALID"
         )
 
         print(
@@ -635,15 +686,34 @@ def tts():
                 "message": "TTS generation failed"
             }), 500
 
-        return Response(
+        # IMPORTANT:
+        # Direct audio response.
+        # Flask/Render will add the proper
+        # Content-Length automatically.
+
+        response = Response(
             audio_data,
             status=200,
-            mimetype="audio/wav",
-            headers={
-                "Cache-Control":
-                    "no-cache"
-            }
+            mimetype="audio/wav"
         )
+
+        response.headers[
+            "Content-Type"
+        ] = "audio/wav"
+
+        response.headers[
+            "Content-Length"
+        ] = str(len(audio_data))
+
+        response.headers[
+            "Cache-Control"
+        ] = "no-cache"
+
+        response.headers[
+            "Connection"
+        ] = "close"
+
+        return response
 
     except Exception as e:
 
@@ -710,6 +780,10 @@ def upload_audio():
                     "Please ask your question again."
             }), 400
 
+        # =================================================
+        # SAVE WAV
+        # =================================================
+
         fd, filename = tempfile.mkstemp(
             suffix=".wav"
         )
@@ -729,6 +803,10 @@ def upload_audio():
             "WAV FILE:",
             filename
         )
+
+        # =================================================
+        # SPEECH
+        # =================================================
 
         recognizer = sr.Recognizer()
 
