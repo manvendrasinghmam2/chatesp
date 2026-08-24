@@ -1,34 +1,33 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from groq import Groq
+from gtts import gTTS
+
 import os
 import io
 import wave
 import tempfile
+import re
 import urllib.parse
-import subprocess
+
 
 app = Flask(__name__)
 
+
 # ============================================================
-# GROQ
+# CONFIG
 # ============================================================
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-if not GROQ_API_KEY:
-    print("WARNING: GROQ_API_KEY NOT SET")
-    client = None
-else:
-    client = Groq(api_key=GROQ_API_KEY)
-    print("Groq client initialized")
-
-
-# ============================================================
-# MODELS
-# ============================================================
-
 STT_MODEL = "whisper-large-v3-turbo"
 AI_MODEL = "openai/gpt-oss-20b"
+
+if GROQ_API_KEY:
+    client = Groq(api_key=GROQ_API_KEY)
+    print("Groq client initialized")
+else:
+    client = None
+    print("WARNING: GROQ_API_KEY NOT SET")
 
 
 # ============================================================
@@ -50,15 +49,16 @@ def health():
     return jsonify({
         "status": "online",
         "groq": client is not None,
+        "upload": "enabled",
+        "wake": "enabled",
+        "tts": "enabled",
         "stt": STT_MODEL,
-        "ai": AI_MODEL,
-        "wake_word": "hello",
-        "tts": "enabled"
+        "ai": AI_MODEL
     }), 200
 
 
 # ============================================================
-# WAV CHECK
+# WAV VALIDATION
 # ============================================================
 
 def check_wav(data):
@@ -83,36 +83,184 @@ def check_wav(data):
             print("--------------------------------")
             print("WAV INFO")
             print("--------------------------------")
-            print("Channels:", channels)
-            print("Sample Width:", sample_width)
-            print("Sample Rate:", sample_rate)
-            print("Frames:", frames)
             print("Duration:", duration)
+            print("Frames:", frames)
+            print("Sample Rate:", sample_rate)
+            print("Sample Width:", sample_width)
+            print("Channels:", channels)
             print("--------------------------------")
 
             return {
-                "channels": channels,
-                "sample_width": sample_width,
-                "sample_rate": sample_rate,
+                "duration": duration,
                 "frames": frames,
-                "duration": duration
+                "sample_rate": sample_rate,
+                "sample_width": sample_width,
+                "channels": channels
             }
 
     except Exception as e:
 
-        print("WAV ERROR:", repr(e))
+        print("WAV VALIDATION ERROR:", repr(e))
         return None
 
 
 # ============================================================
-# TRANSCRIBE
+# NORMALIZE TEXT
 # ============================================================
 
-def transcribe_wav(data):
+def normalize_text(text):
+
+    text = text.lower().strip()
+
+    text = re.sub(
+        r"[^\w\s]",
+        " ",
+        text,
+        flags=re.UNICODE
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
+    return text.strip()
+
+
+# ============================================================
+# WAKE WORD DETECTOR
+# ============================================================
+
+def is_wake_word(text):
+
+    normalized = normalize_text(text)
+
+    print("WAKE NORMALIZED:", normalized)
+
+    if not normalized:
+        return False
+
+    # Exact / common hello variations
+    wake_words = [
+        "hello",
+        "helo",
+        "hellow",
+        "hallo",
+        "hello wolne",
+        "hello wolven",
+        "hello wolven ai",
+        "hello voice",
+        "hello ai",
+        "hey hello"
+    ]
+
+    for word in wake_words:
+
+        if normalized == word:
+            return True
+
+    # If sentence starts with hello
+    if normalized.startswith("hello "):
+        return True
+
+    if normalized.startswith("helo "):
+        return True
+
+    if normalized.startswith("hellow "):
+        return True
+
+    # Hindi/phonetic variations
+    if "hello" in normalized:
+        return True
+
+    return False
+
+
+# ============================================================
+# GROQ TRANSCRIPTION
+# ============================================================
+
+def transcribe_audio(temp_path, prompt):
+
+    with open(temp_path, "rb") as audio_file:
+
+        transcription = client.audio.transcriptions.create(
+
+            file=audio_file,
+
+            model=STT_MODEL,
+
+            prompt=prompt,
+
+            response_format="json",
+
+            temperature=0.0
+        )
+
+    return transcription.text.strip()
+
+
+# ============================================================
+# WAKE ENDPOINT
+# ============================================================
+
+@app.route("/wake", methods=["POST"])
+def wake():
+
+    print()
+    print("================================")
+    print("WAKE WORD REQUEST")
+    print("================================")
 
     temp_path = None
 
     try:
+
+        data = request.get_data()
+
+        print("BYTES:", len(data))
+        print("CONTENT TYPE:", request.content_type)
+
+        if not data:
+
+            return jsonify({
+                "status": "error",
+                "wake": False,
+                "text": "",
+                "message": "No audio received"
+            }), 400
+
+
+        # ----------------------------------------------------
+        # WAV CHECK
+        # ----------------------------------------------------
+
+        wav_info = check_wav(data)
+
+        if wav_info is None:
+
+            return jsonify({
+                "status": "error",
+                "wake": False,
+                "text": "",
+                "message": "Invalid WAV"
+            }), 400
+
+
+        if client is None:
+
+            return jsonify({
+                "status": "error",
+                "wake": False,
+                "text": "",
+                "message": "GROQ_API_KEY missing"
+            }), 500
+
+
+        # ----------------------------------------------------
+        # TEMP FILE
+        # ----------------------------------------------------
 
         temp_file = tempfile.NamedTemporaryFile(
             suffix=".wav",
@@ -124,24 +272,73 @@ def transcribe_wav(data):
         temp_file.write(data)
         temp_file.close()
 
-        with open(temp_path, "rb") as audio_file:
 
-            result = client.audio.transcriptions.create(
-                file=audio_file,
-                model=STT_MODEL,
-                prompt=(
-                    "The speaker may speak Hindi, English, "
-                    "or Hinglish. Transcribe exactly what "
-                    "the speaker says. Preserve Hindi words "
-                    "and do not translate them."
-                ),
-                response_format="json",
-                temperature=0.0
+        # ----------------------------------------------------
+        # TRANSCRIBE
+        # ----------------------------------------------------
+
+        wake_text = transcribe_audio(
+
+            temp_path,
+
+            (
+                "This is a wake word recording. "
+                "The user may say hello, hello wolne, "
+                "hello AI, or similar pronunciation. "
+                "Transcribe only what is actually spoken. "
+                "Do not invent words."
             )
+        )
 
-        text = result.text.strip()
 
-        return text
+        print("WAKE TEXT:", wake_text)
+
+
+        # ----------------------------------------------------
+        # DETECT
+        # ----------------------------------------------------
+
+        wake_detected = is_wake_word(wake_text)
+
+
+        if wake_detected:
+
+            print("################################")
+            print("WAKE WORD DETECTED")
+            print("################################")
+
+        else:
+
+            print("WAKE WORD NOT DETECTED")
+
+
+        return jsonify({
+
+            "status": "ok",
+
+            "wake": wake_detected,
+
+            "text": wake_text
+
+        }), 200
+
+
+    except Exception as e:
+
+        print("WAKE ERROR:", repr(e))
+
+        return jsonify({
+
+            "status": "error",
+
+            "wake": False,
+
+            "text": "",
+
+            "error": str(e)
+
+        }), 500
+
 
     finally:
 
@@ -154,78 +351,7 @@ def transcribe_wav(data):
 
 
 # ============================================================
-# WAKE WORD
-# ============================================================
-
-@app.route("/wake", methods=["POST"])
-def wake():
-
-    print()
-    print("================================")
-    print("WAKE WORD REQUEST")
-    print("================================")
-
-    try:
-
-        data = request.get_data()
-
-        print("BYTES:", len(data))
-
-        if not data:
-            return jsonify({
-                "status": "ok",
-                "wake": False,
-                "text": ""
-            }), 200
-
-        if client is None:
-            return jsonify({
-                "status": "error",
-                "wake": False,
-                "text": "",
-                "message": "GROQ_API_KEY missing"
-            }), 500
-
-        if check_wav(data) is None:
-            return jsonify({
-                "status": "error",
-                "wake": False,
-                "text": ""
-            }), 400
-
-        text = transcribe_wav(data)
-
-        print("WAKE TEXT:", text)
-
-        normalized = text.lower().strip()
-
-        # Hindi/English variations
-        wake = (
-            "hello" in normalized
-            or "हेलो" in normalized
-            or "हैलो" in normalized
-        )
-
-        return jsonify({
-            "status": "ok",
-            "wake": wake,
-            "text": text
-        }), 200
-
-    except Exception as e:
-
-        print("WAKE ERROR:", repr(e))
-
-        return jsonify({
-            "status": "error",
-            "wake": False,
-            "text": "",
-            "error": str(e)
-        }), 500
-
-
-# ============================================================
-# MAIN AI
+# UPLOAD AUDIO
 # ============================================================
 
 @app.route("/uploadAudio", methods=["POST"])
@@ -236,41 +362,83 @@ def upload_audio():
     print("UPLOAD AUDIO REQUEST")
     print("================================")
 
+    temp_path = None
+
     try:
 
         data = request.get_data()
 
         print("Content-Type:", request.content_type)
-        print("Bytes:", len(data))
+        print("Content-Length:", request.content_length)
+        print("AUDIO BYTES:", len(data))
+
+
+        # ----------------------------------------------------
+        # EMPTY
+        # ----------------------------------------------------
 
         if not data:
 
             return jsonify({
+
                 "status": "error",
                 "message": "No audio received",
                 "text": "",
                 "ai_response": ""
+
             }), 400
+
+
+        # ----------------------------------------------------
+        # WAV
+        # ----------------------------------------------------
 
         wav_info = check_wav(data)
 
         if wav_info is None:
 
             return jsonify({
+
                 "status": "error",
                 "message": "Invalid WAV file",
                 "text": "",
                 "ai_response": ""
+
             }), 400
+
+
+        print("WAV CHECK: PASS")
+
+
+        # ----------------------------------------------------
+        # GROQ
+        # ----------------------------------------------------
 
         if client is None:
 
             return jsonify({
+
                 "status": "error",
-                "message": "GROQ_API_KEY missing",
+                "message": "GROQ_API_KEY is missing",
                 "text": "",
                 "ai_response": ""
+
             }), 500
+
+
+        # ----------------------------------------------------
+        # TEMP WAV
+        # ----------------------------------------------------
+
+        temp_file = tempfile.NamedTemporaryFile(
+            suffix=".wav",
+            delete=False
+        )
+
+        temp_path = temp_file.name
+
+        temp_file.write(data)
+        temp_file.close()
 
 
         # ====================================================
@@ -279,21 +447,45 @@ def upload_audio():
 
         print()
         print("================================")
-        print("WHISPER")
+        print("GROQ WHISPER STT")
         print("================================")
 
-        user_text = transcribe_wav(data)
+        user_text = transcribe_audio(
 
-        print("USER:", user_text)
+            temp_path,
+
+            (
+                "The speaker may speak Hindi, English, "
+                "or Hinglish. "
+                "Transcribe exactly what the speaker says. "
+                "Do not translate Hindi into English. "
+                "Keep Hindi words in Hindi when appropriate."
+            )
+        )
+
+
+        print("USER TEXT:", user_text)
+
+
+        # ----------------------------------------------------
+        # NO SPEECH
+        # ----------------------------------------------------
 
         if not user_text:
 
             return jsonify({
+
                 "status": "ok",
+
                 "bytes": len(data),
-                "message": "No speech detected",
+
+                "message":
+                    "Audio received but speech not understood",
+
                 "text": "",
+
                 "ai_response": ""
+
             }), 200
 
 
@@ -306,6 +498,10 @@ def upload_audio():
         print("GROQ AI")
         print("================================")
 
+        print("MODEL:", AI_MODEL)
+        print("USER:", user_text)
+
+
         completion = client.chat.completions.create(
 
             model=AI_MODEL,
@@ -314,19 +510,30 @@ def upload_audio():
 
                 {
                     "role": "system",
+
                     "content": (
-                        "You are a voice assistant. "
-                        "The user can speak Hindi, English, "
+                        "You are a helpful voice assistant. "
+
+                        "The user may speak Hindi, English, "
                         "or Hinglish. "
-                        "Reply in the same language style. "
-                        "Hindi input must get Hindi output. "
-                        "English input must get English output. "
-                        "Hinglish input must get natural Hinglish output. "
-                        "Keep the answer concise because it will "
-                        "be spoken aloud. "
+
+                        "Understand all three languages. "
+
+                        "If the user speaks Hindi, reply in Hindi. "
+
+                        "If the user speaks English, reply in English. "
+
+                        "If the user speaks Hinglish, reply in "
+                        "natural Hinglish. "
+
+                        "Do not translate unnecessarily. "
+
                         "Do not use markdown. "
+
                         "Do not use emojis. "
-                        "Do not use bullet points unless necessary."
+
+                        "Keep the answer concise because it will "
+                        "be spoken through a speaker."
                     )
                 },
 
@@ -338,9 +545,12 @@ def upload_audio():
             ],
 
             temperature=0.3,
+
             max_completion_tokens=300,
+
             reasoning_effort="low"
         )
+
 
         ai_response = (
             completion
@@ -350,19 +560,27 @@ def upload_audio():
             .strip()
         )
 
-        print("AI:", ai_response)
+
+        print()
+        print("AI RESPONSE:")
+        print(ai_response)
 
 
         # ====================================================
-        # RESULT
+        # SUCCESS
         # ====================================================
 
         return jsonify({
 
             "status": "ok",
+
             "bytes": len(data),
-            "message": "Audio processed successfully",
+
+            "message":
+                "Audio processed successfully",
+
             "text": user_text,
+
             "ai_response": ai_response
 
         }), 200
@@ -372,31 +590,54 @@ def upload_audio():
 
         print()
         print("================================")
-        print("AI ERROR")
+        print("AUDIO PROCESSING ERROR")
         print("================================")
 
-        print(repr(e))
+        print("ERROR:", repr(e))
+
 
         return jsonify({
 
             "status": "error",
+
             "message": "Audio processing failed",
+
             "error": str(e),
+
             "text": "",
+
             "ai_response": ""
 
         }), 500
 
 
+    finally:
+
+        if temp_path:
+
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+
 # ============================================================
-# SIMPLE TTS
+# TTS
 # ============================================================
 
 @app.route("/tts", methods=["GET"])
 def tts():
 
-    text = request.args.get("text", "").strip()
-    lang = request.args.get("lang", "en").strip()
+    text = request.args.get(
+        "text",
+        ""
+    ).strip()
+
+    lang = request.args.get(
+        "lang",
+        "en"
+    ).strip().lower()
+
 
     print()
     print("================================")
@@ -406,96 +647,136 @@ def tts():
     print("TEXT:", text)
     print("LANG:", lang)
 
+
     if not text:
 
-        return "No text", 400
+        return jsonify({
+            "status": "error",
+            "message": "Text is empty"
+        }), 400
 
 
     # --------------------------------------------------------
-    # NOTE:
-    # This endpoint expects your server to have a TTS command.
-    #
-    # If using Linux Render:
-    # install espeak-ng in build environment.
+    # LIMIT
     # --------------------------------------------------------
+
+    if len(text) > 500:
+
+        text = text[:500]
+
+
+    # --------------------------------------------------------
+    # LANGUAGE
+    # --------------------------------------------------------
+
+    if lang not in [
+        "en",
+        "hi"
+    ]:
+
+        lang = "en"
+
+
+    temp_path = None
 
     try:
 
-        output = tempfile.NamedTemporaryFile(
-            suffix=".wav",
+        # ----------------------------------------------------
+        # CREATE MP3
+        # ----------------------------------------------------
+
+        temp_file = tempfile.NamedTemporaryFile(
+            suffix=".mp3",
             delete=False
         )
 
-        output_path = output.name
-        output.close()
+        temp_path = temp_file.name
+
+        temp_file.close()
 
 
-        # Hindi:
-        # hi
-        #
-        # English:
-        # en
-        #
-        # Hinglish:
-        # en is usually safest.
+        tts = gTTS(
+            text=text,
+            lang=lang,
+            slow=False
+        )
 
-        voice = "hi" if lang == "hi" else "en"
+        tts.save(temp_path)
 
 
-        command = [
-            "espeak-ng",
-            "-v",
-            voice,
-            "-s",
-            "145",
-            "-w",
-            output_path,
-            text
-        ]
+        # ----------------------------------------------------
+        # READ MP3
+        # ----------------------------------------------------
+
+        with open(
+            temp_path,
+            "rb"
+        ) as audio_file:
+
+            audio_data = audio_file.read()
 
 
-        subprocess.run(
-            command,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+        print(
+            "MP3 BYTES:",
+            len(audio_data)
         )
 
 
-        with open(output_path, "rb") as f:
-            audio_data = f.read()
-
-
-        os.remove(output_path)
-
-
-        from flask import Response
+        # ----------------------------------------------------
+        # RESPONSE
+        # ----------------------------------------------------
 
         return Response(
+
             audio_data,
+
             status=200,
-            mimetype="audio/wav",
+
+            mimetype="audio/mpeg",
+
             headers={
-                "Content-Length": str(len(audio_data)),
-                "Cache-Control": "no-cache"
+
+                "Content-Length":
+                    str(len(audio_data)),
+
+                "Cache-Control":
+                    "no-cache",
+
+                "Connection":
+                    "close"
+
             }
         )
 
 
     except Exception as e:
 
-        print("TTS ERROR:", repr(e))
+        print()
+        print("TTS ERROR:")
+        print(repr(e))
 
-        try:
-            if os.path.exists(output_path):
-                os.remove(output_path)
-        except Exception:
-            pass
 
         return jsonify({
+
             "status": "error",
-            "error": str(e)
+
+            "message":
+                "TTS generation failed",
+
+            "error":
+                str(e)
+
         }), 500
+
+
+    finally:
+
+        if temp_path:
+
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
 
 
 # ============================================================
@@ -519,9 +800,13 @@ if __name__ == "__main__":
     print("PORT:", port)
     print("STT:", STT_MODEL)
     print("AI:", AI_MODEL)
-    print("WAKE: hello")
+    print("WAKE: ENABLED")
+    print("TTS: ENABLED")
+
 
     app.run(
+
         host="0.0.0.0",
+
         port=port
     )
