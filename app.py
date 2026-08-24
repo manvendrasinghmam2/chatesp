@@ -15,10 +15,7 @@ app = Flask(__name__)
 
 AI_API_KEY = os.environ.get("AI_API_KEY")
 
-AI_URL = os.environ.get(
-    "AI_URL",
-    "https://api.groq.com/openai/v1/chat/completions"
-)
+AI_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 AI_MODEL = os.environ.get(
     "AI_MODEL",
@@ -30,46 +27,33 @@ AI_MODEL = os.environ.get(
 # SPEECH TO TEXT
 # =====================================================
 
-STT_URL = os.environ.get(
-    "STT_URL",
+STT_URL = (
     "https://api.groq.com/openai/v1/audio/transcriptions"
 )
 
-STT_MODEL = os.environ.get(
-    "STT_MODEL",
-    "whisper-large-v3-turbo"
-)
+STT_MODEL = "whisper-large-v3-turbo"
 
 
 # =====================================================
 # TTS
 # =====================================================
 
-TTS_URL = os.environ.get(
-    "TTS_URL",
+TTS_URL = (
     "https://api.groq.com/openai/v1/audio/speech"
 )
 
-TTS_MODEL = os.environ.get(
-    "TTS_MODEL",
-    "canopylabs/orpheus-v1-english"
-)
+TTS_MODEL = "canopylabs/orpheus-v1-english"
 
-# Female natural voice
-TTS_VOICE = os.environ.get(
-    "TTS_VOICE",
-    "autumn"
-)
+# =====================================================
+# FORCE FEMALE VOICE
+# =====================================================
+# Do NOT use os.environ here.
+# This prevents Render/server TTS_VOICE=troy
+# from overriding the female voice.
 
-TTS_MAX_CHARS = 200
+TTS_VOICE = "hannah"
 
-# Slightly faster speaking
-TTS_SPEED = float(
-    os.environ.get(
-        "TTS_SPEED",
-        "1.08"
-    )
-)
+TTS_MAX_CHARS = 180
 
 TTS_SAMPLE_RATE = 16000
 
@@ -92,18 +76,33 @@ def home():
 def health():
 
     return jsonify({
+
         "status": "online",
 
-        "speech_engine": "Groq Whisper",
-        "speech_model": STT_MODEL,
+        "speech_engine":
+            "Groq Whisper Large V3 Turbo",
 
-        "ai_engine": "Groq",
-        "model": AI_MODEL,
+        "speech_model":
+            STT_MODEL,
 
-        "tts_engine": "Groq Orpheus",
-        "tts_model": TTS_MODEL,
-        "tts_voice": TTS_VOICE,
-        "tts_speed": TTS_SPEED
+        "ai_engine":
+            "Groq",
+
+        "model":
+            AI_MODEL,
+
+        "tts_engine":
+            "Groq Orpheus",
+
+        "tts_model":
+            TTS_MODEL,
+
+        "tts_voice":
+            TTS_VOICE,
+
+        "voice_gender":
+            "female"
+
     })
 
 
@@ -130,10 +129,18 @@ def wake():
     )
 
     response_data = {
-        "status": "ok",
-        "wake": True,
-        "english": "Hello",
-        "hindi": None
+
+        "status":
+            "ok",
+
+        "wake":
+            True,
+
+        "english":
+            "Hello",
+
+        "hindi":
+            None
     }
 
     print(
@@ -141,9 +148,13 @@ def wake():
         response_data
     )
 
-    print("========================================")
+    print(
+        "========================================"
+    )
 
-    return jsonify(response_data)
+    return jsonify(
+        response_data
+    )
 
 
 # =====================================================
@@ -163,14 +174,25 @@ def test():
     if not data:
 
         return jsonify({
-            "status": "error",
-            "message": "No JSON received"
+
+            "status":
+                "error",
+
+            "message":
+                "No JSON received"
+
         }), 400
 
     return jsonify({
-        "status": "ok",
-        "message": "Data received",
-        "data": data
+
+        "status":
+            "ok",
+
+        "message":
+            "Data received",
+
+        "data":
+            data
     })
 
 
@@ -183,7 +205,9 @@ def clean_text(text):
     if not text:
         return ""
 
-    text = str(text).strip()
+    text = str(
+        text
+    ).strip()
 
     text = re.sub(
         r"\s+",
@@ -203,12 +227,15 @@ def is_valid_query(text):
     if not text:
         return False
 
-    text = str(text).strip()
+    text = str(
+        text
+    ).strip()
 
     if len(text) < 2:
         return False
 
     bad_values = [
+
         "unknown",
         "none",
         "null",
@@ -247,6 +274,7 @@ def transcribe_audio(filename):
         start_time = time.time()
 
         headers = {
+
             "Authorization":
                 "Bearer " + AI_API_KEY,
 
@@ -260,34 +288,45 @@ def transcribe_audio(filename):
         ) as audio_file:
 
             files = {
+
                 "file": (
+
                     "audio.wav",
+
                     audio_file,
+
                     "audio/wav"
                 )
             }
 
             data = {
-                "model": STT_MODEL,
 
-                # Multilingual model.
-                # We intentionally don't force hi/en
-                # because user may speak Hinglish.
-                "response_format": "json",
+                "model":
+                    STT_MODEL,
 
-                "temperature": "0"
+                "response_format":
+                    "json",
+
+                "temperature":
+                    "0"
             }
 
             response = requests.post(
+
                 STT_URL,
+
                 headers=headers,
+
                 files=files,
+
                 data=data,
+
                 timeout=20
             )
 
         elapsed = (
-            time.time() -
+            time.time()
+            -
             start_time
         )
 
@@ -298,7 +337,10 @@ def transcribe_audio(filename):
 
         print(
             "STT TIME:",
-            round(elapsed, 2),
+            round(
+                elapsed,
+                2
+            ),
             "seconds"
         )
 
@@ -310,10 +352,6 @@ def transcribe_audio(filename):
 
             print(
                 response.text[:2000]
-            )
-
-            print(
-                "========================================"
             )
 
             return None
@@ -348,7 +386,9 @@ def transcribe_audio(filename):
             "========================================"
         )
 
-        if not is_valid_query(text):
+        if not is_valid_query(
+            text
+        ):
 
             return None
 
@@ -384,9 +424,7 @@ def transcribe_audio(filename):
 # AI
 # =====================================================
 
-def get_ai_reply(
-    user_text
-):
+def get_ai_reply(user_text):
 
     user_text = clean_text(
         user_text
@@ -406,56 +444,74 @@ def get_ai_reply(
             "Please ask your question again."
         )
 
-    # Very short prompt for lower latency.
     system_prompt = """
+
 You are a fast bilingual voice assistant.
 
 Understand Hindi, English and Hinglish.
 
-Reply in the same natural language style as the user.
+Reply naturally in the same language style
+used by the user.
 
-If the user speaks Hindi, reply in Hindi.
-If English, reply in English.
-If Hinglish, reply in natural Hinglish.
+English -> natural English.
+Hindi -> natural Hindi.
+Hinglish -> natural Hinglish.
 
-Your answer will be spoken by a human-like female voice.
+The response will be spoken aloud
+by a female voice.
 
-Keep the answer extremely concise.
+Keep responses extremely short.
+
 Usually one short sentence.
-Maximum 100 characters when possible.
+Maximum about 100 characters.
 
 Do not use markdown.
 Do not use bullets.
 Do not use emojis.
 Do not repeat the question.
 Do not mention AI.
-Do not explain your language choice.
+Do not explain language selection.
 
 Sound warm, natural and conversational.
+
 """
 
     payload = {
-        "model": AI_MODEL,
+
+        "model":
+            AI_MODEL,
 
         "messages": [
+
             {
-                "role": "system",
-                "content": system_prompt
+                "role":
+                    "system",
+
+                "content":
+                    system_prompt
             },
+
             {
-                "role": "user",
-                "content": user_text
+                "role":
+                    "user",
+
+                "content":
+                    user_text
             }
         ],
 
-        "temperature": 0.2,
+        "temperature":
+            0.2,
 
-        "max_completion_tokens": 80,
+        "max_completion_tokens":
+            80,
 
-        "stream": False
+        "stream":
+            False
     }
 
     headers = {
+
         "Authorization":
             "Bearer " + AI_API_KEY,
 
@@ -476,14 +532,19 @@ Sound warm, natural and conversational.
         start_time = time.time()
 
         response = requests.post(
+
             AI_URL,
+
             headers=headers,
+
             json=payload,
+
             timeout=20
         )
 
         elapsed = (
-            time.time() -
+            time.time()
+            -
             start_time
         )
 
@@ -494,7 +555,10 @@ Sound warm, natural and conversational.
 
         print(
             "AI TIME:",
-            round(elapsed, 2),
+            round(
+                elapsed,
+                2
+            ),
             "seconds"
         )
 
@@ -539,6 +603,7 @@ Sound warm, natural and conversational.
         )
 
         if reply is None:
+
             reply = ""
 
         reply = str(
@@ -551,6 +616,7 @@ Sound warm, natural and conversational.
         ).strip()
 
         prefixes = [
+
             "AI:",
             "Answer:",
             "Response:"
@@ -616,7 +682,7 @@ Sound warm, natural and conversational.
 
 
 # =====================================================
-# TTS
+# FEMALE TTS
 # =====================================================
 
 def generate_tts(text):
@@ -637,7 +703,7 @@ def generate_tts(text):
 
         return None
 
-    # Orpheus max input = 200 characters.
+    # Orpheus maximum input is 200 characters.
     if len(text) > TTS_MAX_CHARS:
 
         text = text[
@@ -654,23 +720,29 @@ def generate_tts(text):
                 :last_dot + 1
             ]
 
+    # =================================================
+    # IMPORTANT
+    # =================================================
+    # voice is HARD-CODED to hannah.
+    # No environment variable can change it.
+
     payload = {
-        "model": TTS_MODEL,
 
-        "voice": TTS_VOICE,
+        "model":
+            TTS_MODEL,
 
-        "input": text,
+        "voice":
+            "hannah",
 
-        "response_format": "wav",
+        "input":
+            text,
 
-        "sample_rate":
-            TTS_SAMPLE_RATE,
-
-        "speed":
-            TTS_SPEED
+        "response_format":
+            "wav"
     }
 
     headers = {
+
         "Authorization":
             "Bearer " + AI_API_KEY,
 
@@ -685,17 +757,20 @@ def generate_tts(text):
 
         print()
         print("========================================")
-        print("TTS REQUEST")
+        print("FEMALE TTS REQUEST")
         print("========================================")
 
         print(
-            "VOICE:",
-            TTS_VOICE
+            "TTS MODEL:",
+            TTS_MODEL
         )
 
         print(
-            "SPEED:",
-            TTS_SPEED
+            "TTS VOICE: HANNAH"
+        )
+
+        print(
+            "TTS GENDER: FEMALE"
         )
 
         print(
@@ -706,14 +781,19 @@ def generate_tts(text):
         start_time = time.time()
 
         response = requests.post(
+
             TTS_URL,
+
             headers=headers,
+
             json=payload,
+
             timeout=20
         )
 
         elapsed = (
-            time.time() -
+            time.time()
+            -
             start_time
         )
 
@@ -724,7 +804,10 @@ def generate_tts(text):
 
         print(
             "TTS TIME:",
-            round(elapsed, 2),
+            round(
+                elapsed,
+                2
+            ),
             "seconds"
         )
 
@@ -749,7 +832,7 @@ def generate_tts(text):
         if not audio_data:
 
             print(
-                "TTS returned empty audio"
+                "TTS EMPTY AUDIO"
             )
 
             return None
@@ -757,6 +840,10 @@ def generate_tts(text):
         print(
             "TTS AUDIO BYTES:",
             len(audio_data)
+        )
+
+        print(
+            "VOICE USED: HANNAH FEMALE"
         )
 
         print(
@@ -810,9 +897,13 @@ def tts():
         if not data:
 
             return jsonify({
-                "status": "error",
+
+                "status":
+                    "error",
+
                 "message":
                     "No JSON received"
+
             }), 400
 
         text = clean_text(
@@ -822,9 +913,13 @@ def tts():
         if not text:
 
             return jsonify({
-                "status": "error",
+
+                "status":
+                    "error",
+
                 "message":
                     "No text received"
+
             }), 400
 
         audio_data = generate_tts(
@@ -834,12 +929,17 @@ def tts():
         if audio_data is None:
 
             return jsonify({
-                "status": "error",
+
+                "status":
+                    "error",
+
                 "message":
                     "TTS generation failed"
+
             }), 500
 
         return Response(
+
             audio_data,
 
             status=200,
@@ -847,11 +947,16 @@ def tts():
             mimetype="audio/wav",
 
             headers={
+
                 "Cache-Control":
                     "no-cache",
 
                 "Content-Length":
-                    str(len(audio_data))
+                    str(
+                        len(
+                            audio_data
+                        )
+                    )
             }
         )
 
@@ -863,8 +968,13 @@ def tts():
         )
 
         return jsonify({
-            "status": "error",
-            "message": str(e)
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+
         }), 500
 
 
@@ -913,7 +1023,9 @@ def upload_audio():
         if not audio_data:
 
             return jsonify({
-                "status": "error",
+
+                "status":
+                    "error",
 
                 "message":
                     "No audio received",
@@ -929,6 +1041,7 @@ def upload_audio():
 
                 "ai_reply":
                     "Please ask your question again."
+
             }), 400
 
 
@@ -940,7 +1053,9 @@ def upload_audio():
             suffix=".wav"
         )
 
-        os.close(fd)
+        os.close(
+            fd
+        )
 
         with open(
             filename,
@@ -958,7 +1073,7 @@ def upload_audio():
 
 
         # =================================================
-        # ONE FAST STT CALL
+        # ONE FAST STT
         # =================================================
 
         transcription = transcribe_audio(
@@ -970,7 +1085,9 @@ def upload_audio():
         ):
 
             return jsonify({
-                "status": "error",
+
+                "status":
+                    "error",
 
                 "message":
                     "Speech not understood",
@@ -986,6 +1103,7 @@ def upload_audio():
 
                 "ai_reply":
                     "Please ask your question again."
+
             }), 400
 
 
@@ -999,11 +1117,12 @@ def upload_audio():
 
 
         # =================================================
-        # FINAL RESPONSE
+        # FINAL
         # =================================================
 
         total_time = (
-            time.time() -
+            time.time()
+            -
             total_start
         )
 
@@ -1015,8 +1134,6 @@ def upload_audio():
             "transcription":
                 transcription,
 
-            # Kept for ESP32 compatibility.
-            # One multilingual STT result is used.
             "hindi_transcription":
                 transcription,
 
@@ -1090,6 +1207,7 @@ def upload_audio():
 
             "ai_reply":
                 "AI response nahi mil saka."
+
         }), 500
 
 
@@ -1126,7 +1244,7 @@ if __name__ == "__main__":
 
     print()
     print("========================================")
-    print("ESP32 FAST VOICE SERVER")
+    print("ESP32 FAST FEMALE VOICE SERVER")
     print("========================================")
 
     print(
@@ -1150,13 +1268,11 @@ if __name__ == "__main__":
     )
 
     print(
-        "TTS VOICE:",
-        TTS_VOICE
+        "TTS VOICE: HANNAH"
     )
 
     print(
-        "TTS SPEED:",
-        TTS_SPEED
+        "TTS GENDER: FEMALE"
     )
 
     print(
@@ -1171,7 +1287,10 @@ if __name__ == "__main__":
     )
 
     app.run(
+
         host="0.0.0.0",
+
         port=port,
+
         threaded=True
     )
