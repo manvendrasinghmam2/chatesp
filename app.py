@@ -1,21 +1,23 @@
 from flask import Flask, request, jsonify, Response
 import os
-import speech_recognition as sr
-import requests
 import re
 import tempfile
+import requests
+import speech_recognition as sr
+from concurrent.futures import ThreadPoolExecutor
+
+from google.oauth2 import service_account
+from google.auth.transport.requests import Request as GoogleAuthRequest
 
 
 app = Flask(__name__)
 
 
 # =====================================================
-# AI CONFIG
+# CONFIG
 # =====================================================
 
-AI_API_KEY = os.environ.get(
-    "AI_API_KEY"
-)
+AI_API_KEY = os.environ.get("AI_API_KEY")
 
 AI_URL = os.environ.get(
     "AI_URL",
@@ -29,26 +31,87 @@ AI_MODEL = os.environ.get(
 
 
 # =====================================================
-# TTS CONFIG
+# GOOGLE TTS
 # =====================================================
 
-TTS_URL = os.environ.get(
-    "TTS_URL",
-    "https://api.groq.com/openai/v1/audio/speech"
+GOOGLE_TTS_URL = (
+    "https://texttospeech.googleapis.com/v1/text:synthesize"
 )
 
-TTS_MODEL = os.environ.get(
-    "TTS_MODEL",
-    "canopylabs/orpheus-v1-english"
+# Indian female Hindi voice
+GOOGLE_HINDI_VOICE = os.environ.get(
+    "GOOGLE_HINDI_VOICE",
+    "hi-IN-Neural2-A"
 )
 
-# Natural voice
-TTS_VOICE = os.environ.get(
-    "TTS_VOICE",
-    "hannah"
+# Indian female English voice
+GOOGLE_ENGLISH_VOICE = os.environ.get(
+    "GOOGLE_ENGLISH_VOICE",
+    "en-IN-Neural2-A"
 )
 
-TTS_MAX_CHARS = 150
+GOOGLE_PROJECT_ID = os.environ.get(
+    "GOOGLE_PROJECT_ID"
+)
+
+GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get(
+    "GOOGLE_SERVICE_ACCOUNT_JSON"
+)
+
+
+# =====================================================
+# GOOGLE AUTH
+# =====================================================
+
+google_credentials = None
+
+
+def get_google_credentials():
+
+    global google_credentials
+
+    if not GOOGLE_SERVICE_ACCOUNT_JSON:
+        print("GOOGLE_SERVICE_ACCOUNT_JSON missing")
+        return None
+
+    try:
+
+        if google_credentials is None:
+
+            import json
+
+            service_account_info = json.loads(
+                GOOGLE_SERVICE_ACCOUNT_JSON
+            )
+
+            google_credentials = (
+                service_account.Credentials.from_service_account_info(
+                    service_account_info,
+                    scopes=[
+                        "https://www.googleapis.com/auth/cloud-platform"
+                    ]
+                )
+            )
+
+        if (
+            google_credentials.expired
+            or not google_credentials.valid
+        ):
+
+            google_credentials.refresh(
+                GoogleAuthRequest()
+            )
+
+        return google_credentials
+
+    except Exception as e:
+
+        print(
+            "GOOGLE AUTH ERROR:",
+            str(e)
+        )
+
+        return None
 
 
 # =====================================================
@@ -74,40 +137,16 @@ def health():
 
         "ai_engine": "Groq",
 
-        "model": AI_MODEL,
+        "ai_model": AI_MODEL,
 
-        "tts_engine": "Groq Orpheus",
+        "tts_engine": "Google Cloud Text-to-Speech",
 
-        "tts_model": TTS_MODEL,
+        "hindi_voice":
+            GOOGLE_HINDI_VOICE,
 
-        "tts_voice": TTS_VOICE
-    })
+        "english_voice":
+            GOOGLE_ENGLISH_VOICE
 
-
-# =====================================================
-# WAKE
-# =====================================================
-
-@app.route(
-    "/wake",
-    methods=["POST", "GET"]
-)
-def wake():
-
-    audio_data = request.get_data()
-
-    # Current wake behaviour:
-    # every wake request activates the assistant.
-
-    return jsonify({
-
-        "status": "ok",
-
-        "wake": True,
-
-        "english": "Hello",
-
-        "hindi": None
     })
 
 
@@ -153,6 +192,7 @@ def is_valid_query(text):
         "no response",
         "no valid query",
         "speech not understood"
+
     ]
 
     if text.lower() in bad_values:
@@ -191,87 +231,108 @@ def get_ai_reply(
     ):
 
         return (
-            "Please ask again."
+            "Please ask your question again."
         )
 
+
     system_prompt = """
+You are a natural Indian voice assistant.
 
-You are a fast, natural Indian voice assistant.
+Understand the user's actual spoken language.
 
-Understand Hindi, English and Hinglish.
+Hindi recognition:
+Use it when the user speaks Hindi.
 
-If the user speaks English:
-answer in natural English.
+English recognition:
+Use it when the user speaks English.
 
-If the user speaks Hindi:
-answer in natural Hindi.
+If the user speaks Hinglish or Roman Hindi,
+answer naturally in Hinglish.
 
-If the user speaks Hinglish:
-answer in natural Hinglish.
+LANGUAGE:
 
-IMPORTANT:
+English -> natural Indian English.
+
+Hindi -> natural Hindi.
+
+Hinglish -> natural Hinglish.
+
+Do not mention speech recognition.
+
+Do not explain your language decision.
+
+VOICE STYLE:
+
+Your answer will be spoken by a female Indian voice.
 
 Keep the answer very short.
 
-Usually ONE sentence.
+Usually one sentence.
 
-Maximum 100 characters when possible.
+Maximum around 120 characters when possible.
 
-The answer will be spoken aloud.
+No markdown.
 
-Do not use markdown.
+No bullet points.
 
-Do not use bullet points.
+No emojis.
 
-Do not use emojis.
-
-Do not use headings.
+No headings.
 
 Do not repeat the question.
 
 Do not say "As an AI".
 
-Sound like a natural human Indian voice assistant.
-
-Be friendly and conversational.
-
+Sound natural and conversational.
 """
 
-    user_content = f"""
 
+    user_content = f"""
 Hindi recognition:
 {hindi_text if hindi_text else "No result"}
 
 English recognition:
 {english_text if english_text else "No result"}
 
-Answer the user's intended question.
-
+Answer the user's question naturally.
 """
+
 
     payload = {
 
-        "model": AI_MODEL,
+        "model":
+            AI_MODEL,
 
         "messages": [
 
             {
-                "role": "system",
-                "content": system_prompt
+                "role":
+                    "system",
+
+                "content":
+                    system_prompt
             },
 
             {
-                "role": "user",
-                "content": user_content
+                "role":
+                    "user",
+
+                "content":
+                    user_content
             }
+
         ],
 
-        "temperature": 0.1,
+        "temperature":
+            0.2,
 
-        "max_completion_tokens": 80,
+        "max_completion_tokens":
+            120,
 
-        "stream": False
+        "stream":
+            False
     }
+
 
     headers = {
 
@@ -283,7 +344,9 @@ Answer the user's intended question.
 
         "Accept":
             "application/json"
+
     }
+
 
     try:
 
@@ -295,8 +358,10 @@ Answer the user's intended question.
 
             json=payload,
 
-            timeout=25
+            timeout=20
+
         )
+
 
         if response.status_code != 200:
 
@@ -309,11 +374,14 @@ Answer the user's intended question.
                 "AI response nahi mil saka."
             )
 
+
         data = response.json()
+
 
         choices = data.get(
             "choices"
         )
+
 
         if not choices:
 
@@ -321,33 +389,38 @@ Answer the user's intended question.
                 "AI response nahi mil saka."
             )
 
+
         message = choices[0].get(
             "message",
             {}
         )
+
 
         reply = message.get(
             "content",
             ""
         )
 
-        if reply is None:
-            reply = ""
 
-        reply = str(
+        reply = clean_text(
             reply
-        ).strip()
+        )
+
 
         reply = reply.replace(
             "```",
             ""
         ).strip()
 
+
         prefixes = [
+
             "AI:",
             "Answer:",
             "Response:"
+
         ]
+
 
         for prefix in prefixes:
 
@@ -357,18 +430,21 @@ Answer the user's intended question.
                     len(prefix):
                 ].strip()
 
+
         if not reply:
 
             return (
                 "AI response nahi mil saka."
             )
 
+
         return reply
+
 
     except Exception as e:
 
         print(
-            "AI ERROR:",
+            "AI EXCEPTION:",
             str(e)
         )
 
@@ -378,103 +454,210 @@ Answer the user's intended question.
 
 
 # =====================================================
-# TTS
+# GOOGLE TTS
 # =====================================================
 
-def generate_tts(text):
+def generate_tts(
+    text,
+    use_hindi=False
+):
 
-    text = clean_text(text)
+    text = clean_text(
+        text
+    )
 
     if not text:
         return None
 
-    if not AI_API_KEY:
 
+    credentials = get_google_credentials()
+
+    if credentials is None:
         return None
 
+
     # Keep TTS short for faster response.
-    if len(text) > TTS_MAX_CHARS:
 
-        text = text[
-            :TTS_MAX_CHARS
-        ]
+    if len(text) > 180:
 
-        last_dot = text.rfind(".")
+        text = text[:180]
 
-        if last_dot > 40:
+        last_space = text.rfind(" ")
 
-            text = text[
-                :last_dot + 1
-            ]
+        if last_space > 50:
+
+            text = text[:last_space]
+
+
+    if use_hindi:
+
+        language_code = "hi-IN"
+
+        voice_name = (
+            GOOGLE_HINDI_VOICE
+        )
+
+    else:
+
+        language_code = "en-IN"
+
+        voice_name = (
+            GOOGLE_ENGLISH_VOICE
+        )
+
 
     payload = {
 
-        "model":
-            TTS_MODEL,
+        "input": {
 
-        "voice":
-            TTS_VOICE,
+            "text":
+                text
 
-        "input":
-            text,
+        },
 
-        "response_format":
-            "wav",
+        "voice": {
 
-        "sample_rate":
-            16000
+            "languageCode":
+                language_code,
+
+            "name":
+                voice_name,
+
+            "ssmlGender":
+                "FEMALE"
+
+        },
+
+        "audioConfig": {
+
+            "audioEncoding":
+                "LINEAR16",
+
+            "sampleRateHertz":
+                16000,
+
+            "speakingRate":
+                1.05,
+
+            "pitch":
+                0.0
+
+        }
+
     }
 
-    headers = {
-
-        "Authorization":
-            "Bearer " + AI_API_KEY,
-
-        "Content-Type":
-            "application/json",
-
-        "Accept":
-            "audio/wav"
-    }
 
     try:
 
+        access_token = (
+            credentials.token
+        )
+
+
+        headers = {
+
+            "Authorization":
+                "Bearer " + access_token,
+
+            "Content-Type":
+                "application/json",
+
+            "Accept":
+                "application/json"
+
+        }
+
+
         response = requests.post(
 
-            TTS_URL,
+            GOOGLE_TTS_URL,
 
             headers=headers,
 
             json=payload,
 
-            timeout=25
+            timeout=15
+
         )
+
 
         if response.status_code != 200:
 
             print(
-                "TTS ERROR:",
+                "GOOGLE TTS ERROR:",
                 response.text[:1000]
             )
 
             return None
 
-        audio_data = response.content
 
-        if not audio_data:
+        data = response.json()
+
+
+        audio_base64 = data.get(
+            "audioContent"
+        )
+
+
+        if not audio_base64:
 
             return None
 
+
+        import base64
+
+        audio_data = base64.b64decode(
+            audio_base64
+        )
+
+
         return audio_data
+
 
     except Exception as e:
 
         print(
-            "TTS ERROR:",
+            "GOOGLE TTS EXCEPTION:",
             str(e)
         )
 
         return None
+
+
+# =====================================================
+# DETECT TTS LANGUAGE
+# =====================================================
+
+def is_hindi_text(text):
+
+    if not text:
+        return False
+
+    # Devanagari characters
+
+    hindi_chars = 0
+
+    total_chars = 0
+
+    for c in text:
+
+        if c.isalpha():
+
+            total_chars += 1
+
+            if "\u0900" <= c <= "\u097F":
+
+                hindi_chars += 1
+
+
+    if total_chars == 0:
+        return False
+
+
+    return (
+        hindi_chars / total_chars
+        > 0.20
+    )
 
 
 # =====================================================
@@ -493,6 +676,7 @@ def tts():
             silent=True
         )
 
+
         if not data:
 
             return jsonify({
@@ -505,9 +689,11 @@ def tts():
 
             }), 400
 
+
         text = clean_text(
             data.get("text")
         )
+
 
         if not text:
 
@@ -521,9 +707,20 @@ def tts():
 
             }), 400
 
-        audio_data = generate_tts(
+
+        hindi = is_hindi_text(
             text
         )
+
+
+        audio_data = generate_tts(
+
+            text,
+
+            use_hindi=hindi
+
+        )
+
 
         if audio_data is None:
 
@@ -533,9 +730,10 @@ def tts():
                     "error",
 
                 "message":
-                    "TTS generation failed"
+                    "Google TTS failed"
 
             }), 500
+
 
         return Response(
 
@@ -552,8 +750,11 @@ def tts():
 
                 "Content-Length":
                     str(len(audio_data))
+
             }
+
         )
+
 
     except Exception as e:
 
@@ -569,6 +770,93 @@ def tts():
 
 
 # =====================================================
+# WAKE
+# =====================================================
+
+@app.route(
+    "/wake",
+    methods=["POST", "GET"]
+)
+def wake():
+
+    audio_data = request.get_data()
+
+
+    # Current wake behaviour:
+    # every wake request activates the assistant.
+
+    return jsonify({
+
+        "status":
+            "ok",
+
+        "wake":
+            True,
+
+        "english":
+            "Hello",
+
+        "hindi":
+            None
+
+    })
+
+
+# =====================================================
+# SPEECH RECOGNITION
+# =====================================================
+
+def recognize_hindi(
+    audio
+):
+
+    recognizer = sr.Recognizer()
+
+    try:
+
+        result = recognizer.recognize_google(
+
+            audio,
+
+            language="hi-IN"
+
+        )
+
+        return clean_text(
+            result
+        )
+
+    except Exception:
+
+        return None
+
+
+def recognize_english(
+    audio
+):
+
+    recognizer = sr.Recognizer()
+
+    try:
+
+        result = recognizer.recognize_google(
+
+            audio,
+
+            language="en-IN"
+
+        )
+
+        return clean_text(
+            result
+        )
+
+    except Exception:
+
+        return None
+
+
+# =====================================================
 # UPLOAD AUDIO
 # =====================================================
 
@@ -580,9 +868,11 @@ def upload_audio():
 
     filename = None
 
+
     try:
 
         audio_data = request.get_data()
+
 
         if not audio_data:
 
@@ -604,9 +894,10 @@ def upload_audio():
                     None,
 
                 "ai_reply":
-                    "Please ask again."
+                    "Please ask your question again."
 
             }), 400
+
 
         # -------------------------------------------------
         # SAVE WAV
@@ -618,6 +909,7 @@ def upload_audio():
 
         os.close(fd)
 
+
         with open(
             filename,
             "wb"
@@ -627,11 +919,13 @@ def upload_audio():
                 audio_data
             )
 
+
         # -------------------------------------------------
-        # SPEECH RECOGNITION
+        # READ AUDIO
         # -------------------------------------------------
 
         recognizer = sr.Recognizer()
+
 
         with sr.AudioFile(
             filename
@@ -641,60 +935,38 @@ def upload_audio():
                 source
             )
 
-        hindi_text = None
-        english_text = None
 
-        # =================================================
-        # HINDI
-        # =================================================
+        # -------------------------------------------------
+        # PARALLEL RECOGNITION
+        # -------------------------------------------------
 
-        try:
+        with ThreadPoolExecutor(
+            max_workers=2
+        ) as executor:
 
-            hindi_text = recognizer.recognize_google(
-
-                audio,
-
-                language="hi-IN"
+            hindi_future = executor.submit(
+                recognize_hindi,
+                audio
             )
 
-            hindi_text = clean_text(
-                hindi_text
+            english_future = executor.submit(
+                recognize_english,
+                audio
             )
 
-        except (
-            sr.UnknownValueError,
-            sr.RequestError
-        ):
 
-            hindi_text = None
-
-        # =================================================
-        # ENGLISH
-        # =================================================
-
-        try:
-
-            english_text = recognizer.recognize_google(
-
-                audio,
-
-                language="en-IN"
+            hindi_text = (
+                hindi_future.result()
             )
 
-            english_text = clean_text(
-                english_text
+            english_text = (
+                english_future.result()
             )
 
-        except (
-            sr.UnknownValueError,
-            sr.RequestError
-        ):
 
-            english_text = None
-
-        # =================================================
+        # -------------------------------------------------
         # VALIDATION
-        # =================================================
+        # -------------------------------------------------
 
         if (
             not is_valid_query(hindi_text)
@@ -720,24 +992,27 @@ def upload_audio():
                     english_text,
 
                 "ai_reply":
-                    "Please ask again."
+                    "Please ask your question again."
 
             }), 400
 
-        # =================================================
+
+        # -------------------------------------------------
         # AI
-        # =================================================
+        # -------------------------------------------------
 
         ai_reply = get_ai_reply(
 
             hindi_text,
 
             english_text
+
         )
 
-        # =================================================
+
+        # -------------------------------------------------
         # BEST QUERY
-        # =================================================
+        # -------------------------------------------------
 
         if is_valid_query(
             english_text
@@ -753,9 +1028,10 @@ def upload_audio():
                 hindi_text
             )
 
-        # =================================================
-        # FINAL RESPONSE
-        # =================================================
+
+        # -------------------------------------------------
+        # FINAL JSON
+        # -------------------------------------------------
 
         return jsonify({
 
@@ -773,7 +1049,9 @@ def upload_audio():
 
             "ai_reply":
                 ai_reply
+
         })
+
 
     except Exception as e:
 
@@ -781,6 +1059,7 @@ def upload_audio():
             "SERVER ERROR:",
             str(e)
         )
+
 
         return jsonify({
 
@@ -803,6 +1082,7 @@ def upload_audio():
                 "AI response nahi mil saka."
 
         }), 500
+
 
     finally:
 
@@ -835,7 +1115,9 @@ if __name__ == "__main__":
             "PORT",
             10000
         )
+
     )
+
 
     app.run(
 
@@ -844,4 +1126,5 @@ if __name__ == "__main__":
         port=port,
 
         threaded=True
+
     )
