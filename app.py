@@ -42,7 +42,7 @@ TTS_MODEL = os.environ.get(
 
 TTS_VOICE = os.environ.get(
     "TTS_VOICE",
-    "hannah"
+    "troy"
 )
 
 TTS_MAX_CHARS = 200
