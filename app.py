@@ -44,7 +44,7 @@ TTS_MODEL = os.environ.get(
 # Diana = female voice
 TTS_VOICE = os.environ.get(
     "TTS_VOICE",
-    "diana"
+    "Autumn"
 )
 
 # Orpheus input maximum
@@ -534,7 +534,7 @@ Determine the intended meaning and answer naturally.
             )
 
             return (
-                "AI response nahi mil saka."
+                "No AI response. Try again"
             )
 
         try:
@@ -549,7 +549,7 @@ Determine the intended meaning and answer naturally.
             )
 
             return (
-                "AI response nahi mil saka."
+                "No AI response. Try again."
             )
 
         choices = data.get(
