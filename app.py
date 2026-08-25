@@ -44,7 +44,7 @@ TTS_MODEL = os.environ.get(
 # Diana = female voice
 TTS_VOICE = os.environ.get(
     "TTS_VOICE",
-    "Diana"
+    "diana"
 )
 
 # Orpheus input maximum
