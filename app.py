@@ -1,3 +1,4 @@
+
 from flask import Flask, request, jsonify, Response
 import os
 import speech_recognition as sr
@@ -41,14 +42,19 @@ TTS_MODEL = os.environ.get(
     "canopylabs/orpheus-v1-english"
 )
 
-# Female voice
 TTS_VOICE = os.environ.get(
     "TTS_VOICE",
-    "hannah"
+    "autumn"
 )
 
-# Orpheus input maximum
 TTS_MAX_CHARS = 200
+
+
+# ============================================================
+# STANDARD AI ERROR MESSAGE
+# ============================================================
+
+AI_ERROR_MESSAGE = "No AI response. Try again."
 
 
 # ============================================================
@@ -69,7 +75,9 @@ def home():
 def health():
 
     return jsonify({
-        "status": "online",
+
+        "status":
+            "online",
 
         "speech_engine":
             "Google Speech Recognition",
@@ -87,7 +95,17 @@ def health():
             TTS_MODEL,
 
         "tts_voice":
-            TTS_VOICE
+            TTS_VOICE,
+
+        "assistant":
+            "Diana",
+
+        "company":
+            "Avitron Aerospace Pvt. Ltd.",
+
+        "domain":
+            "STEM Education, Robotics, AI, Electronics, Aerospace"
+
     })
 
 
@@ -116,10 +134,18 @@ def wake():
         )
 
         response_data = {
-            "status": "ok",
-            "wake": True,
-            "english": "Hello",
-            "hindi": None
+
+            "status":
+                "ok",
+
+            "wake":
+                True,
+
+            "english":
+                "Hello",
+
+            "hindi":
+                None
         }
 
         print(
@@ -129,7 +155,9 @@ def wake():
 
         print("========================================")
 
-        return jsonify(response_data)
+        return jsonify(
+            response_data
+        )
 
     except Exception as e:
 
@@ -139,8 +167,13 @@ def wake():
         )
 
         return jsonify({
-            "status": "error",
-            "message": str(e)
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+
         }), 500
 
 
@@ -163,21 +196,38 @@ def test():
         if not data:
 
             return jsonify({
-                "status": "error",
-                "message": "No JSON received"
+
+                "status":
+                    "error",
+
+                "message":
+                    "No JSON received"
+
             }), 400
 
         return jsonify({
-            "status": "ok",
-            "message": "Data received",
-            "data": data
+
+            "status":
+                "ok",
+
+            "message":
+                "Data received",
+
+            "data":
+                data
+
         })
 
     except Exception as e:
 
         return jsonify({
-            "status": "error",
-            "message": str(e)
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+
         }), 500
 
 
@@ -195,7 +245,10 @@ def clean_text(text):
     text = text.strip()
 
     # Remove markdown code blocks
-    text = text.replace("```", "")
+    text = text.replace(
+        "```",
+        ""
+    )
 
     # Remove newlines
     text = re.sub(
@@ -204,7 +257,7 @@ def clean_text(text):
         text
     )
 
-    # Multiple spaces
+    # Remove multiple spaces
     text = re.sub(
         r"\s+",
         " ",
@@ -220,17 +273,20 @@ def clean_text(text):
 
 def clean_tts_text(text):
 
-    text = clean_text(text)
+    text = clean_text(
+        text
+    )
 
     if not text:
         return ""
 
-    # Remove common AI prefixes
     prefixes = [
+
         "AI:",
         "Answer:",
         "Response:",
-        "Assistant:"
+        "Assistant:",
+        "Diana:"
     ]
 
     for prefix in prefixes:
@@ -274,22 +330,27 @@ def clean_tts_text(text):
 
     text = text.strip()
 
-    # Groq Orpheus max 200 chars
+    # Limit TTS length
     if len(text) > TTS_MAX_CHARS:
 
         text = text[
             :TTS_MAX_CHARS
         ]
 
-        # Try to end at punctuation
         positions = [
+
             text.rfind("."),
+
             text.rfind("?"),
+
             text.rfind("!"),
+
             text.rfind(",")
         ]
 
-        best = max(positions)
+        best = max(
+            positions
+        )
 
         if best >= 40:
 
@@ -309,17 +370,25 @@ def is_valid_query(text):
     if not text:
         return False
 
-    text = str(text).strip()
+    text = str(
+        text
+    ).strip()
 
     if len(text) < 2:
         return False
 
     bad_values = [
+
         "unknown",
+
         "none",
+
         "null",
+
         "no response",
+
         "no valid query",
+
         "speech not understood"
     ]
 
@@ -347,7 +416,7 @@ def get_ai_reply(
     )
 
     # ========================================================
-    # AI KEY MISSING
+    # API KEY CHECK
     # ========================================================
 
     if not AI_API_KEY:
@@ -356,12 +425,10 @@ def get_ai_reply(
             "AI ERROR: AI_API_KEY missing"
         )
 
-        return (
-            "No AI response. Try again."
-        )
+        return AI_ERROR_MESSAGE
 
     # ========================================================
-    # INVALID QUERY
+    # QUERY CHECK
     # ========================================================
 
     if (
@@ -375,64 +442,202 @@ def get_ai_reply(
         )
 
     # ========================================================
-    # AI SYSTEM PROMPT
+    # DIANA SYSTEM PROMPT
     # ========================================================
 
     system_prompt = """
-You are Diana, a concise bilingual voice assistant running
-on an ESP32.
+You are Diana, a friendly and concise voice assistant for
+Avitron Aerospace Pvt. Ltd.
 
-The user speech may be:
-- English
-- Hindi
-- Hinglish
-- Roman Hindi
+Your primary purpose is to help users with questions related to:
 
-Understand the intended meaning from both recognition results.
+Avitron Aerospace Pvt. Ltd.
+STEM education.
+Robotics.
+Artificial Intelligence.
+AI projects.
+Electronics.
+Embedded systems.
+ESP32.
+Arduino.
+Microcontrollers.
+Sensors and actuators.
+Robotics projects.
+AI and machine learning education.
+Electronics projects.
+Programming related to robotics, AI and electronics.
+STEM learning.
+Science and technology education.
+Aerospace and educational aerospace technology.
+
+DOMAIN RULE:
+
+If the user's question is related to any of the topics above,
+answer the question helpfully and naturally.
+
+You can answer educational questions, technical questions,
+project questions, beginner questions and practical questions
+about STEM, robotics, AI, electronics, embedded systems,
+microcontrollers and aerospace technology.
+
+If the question is NOT related to STEM education, robotics,
+AI, electronics, embedded systems, aerospace or Avitron
+Aerospace Pvt. Ltd., do NOT answer the unrelated question.
+
+Instead politely explain that you specialize in these topics
+and ask the user to ask something related to them.
 
 LANGUAGE RULES:
+
+The user may speak:
+
+English.
+Hindi.
+Hinglish.
+Roman Hindi.
+
+Understand the intended meaning from both speech recognition
+results.
 
 If the user speaks English:
 answer in natural English.
 
 If the user speaks Hindi:
-answer in natural Roman Hindi / Hinglish.
+answer in natural Roman Hindi or Hinglish.
 
 If the user speaks Hinglish:
 answer in natural Hinglish.
 
 IMPORTANT:
-Never answer using Devanagari Hindi script.
 
-Hindi answers MUST be written using English/Roman letters.
+Never use Devanagari Hindi script.
+
+Hindi answers MUST always use English/Roman letters.
 
 Examples:
 
 User:
-Aap kaise ho?
+Robotics kya hoti hai?
 
 Good:
-Main bilkul theek hoon. Aap kaise hain?
+Robotics ek technology field hai jisme robots ko design,
+build aur program kiya jata hai.
 
 User:
-Mujhe time batao.
+What is AI?
 
 Good:
-Bilkul, main aapko time bata deta hoon.
+AI means Artificial Intelligence. It helps computers learn,
+understand information and make decisions.
 
 User:
-What is the capital of India?
+ESP32 kya hai?
 
 Good:
-The capital of India is New Delhi.
+ESP32 ek powerful microcontroller hai jo Wi-Fi aur Bluetooth
+ke saath robotics aur IoT projects mein use hota hai.
+
+User:
+Arduino se robot kaise banaye?
+
+Good:
+Arduino, motors, motor driver aur sensors ka use karke basic
+robot banaya ja sakta hai. Main aapko step by step guide kar
+sakti hoon.
+
+User:
+Electronics kya hai?
+
+Good:
+Electronics mein circuits aur electronic components ka use
+karke devices aur systems banaye jate hain.
+
+User:
+What can you help me with?
+
+Good:
+I can help with STEM education, AI, robotics, electronics,
+embedded systems and aerospace technology.
+
+UNRELATED QUESTION EXAMPLE:
+
+User:
+Who is the Prime Minister of India?
+
+Good:
+I can help with STEM education, AI, robotics, electronics and
+related technology. What would you like to learn?
+
+Hindi/Hinglish version:
+
+Main STEM education, AI, robotics, electronics aur related
+technology mein help kar sakti hoon. Aap kya poochna chahenge?
+
+Another example:
+
+User:
+Mujhe ek joke sunao.
+
+Good:
+Main STEM education, AI, robotics aur electronics se related
+questions mein help kar sakti hoon. Main aapki kya sahayata
+kar sakti hoon?
+
+AVITRON AEROSPACE RULE:
+
+If the user asks specifically about Avitron Aerospace Pvt. Ltd.,
+only provide information that is actually available in the
+conversation or provided knowledge.
+
+Never invent company facts.
+
+Never invent courses.
+
+Never invent products.
+
+Never invent facilities.
+
+Never invent employees.
+
+Never invent addresses.
+
+Never invent achievements.
+
+Never invent programs.
+
+Never claim that Avitron provides a service unless the
+information is actually known.
+
+If you do not know a specific Avitron fact, say:
+
+"Is information ke baare mein mere paas abhi exact details
+nahi hain. Aap Avitron Aerospace Pvt. Ltd. ke STEM,
+robotics, AI, electronics ya aerospace programs ke baare mein
+pooch sakte hain."
+
+TECHNICAL ANSWER RULE:
+
+For technical questions, explain clearly and simply.
+
+For beginner questions, use beginner-friendly language.
+
+For advanced questions, provide technically accurate answers.
+
+If the user asks how to build something, explain the required
+components and basic steps when appropriate.
+
+Do not unnecessarily make answers complicated.
 
 VOICE RULES:
 
-Keep the answer very short.
+Keep answers short and easy to speak.
 
-Usually one or two sentences.
+Usually one or two short sentences.
 
-Maximum about 150 characters when possible.
+For technical questions, use up to three short sentences when
+necessary.
+
+Maximum about 180 characters when possible.
 
 No markdown.
 
@@ -442,14 +647,27 @@ No emojis.
 
 No headings.
 
-Do not repeat the question.
+Do not repeat the user's question.
 
 Do not say "As an AI".
 
-Sound natural and conversational.
+Sound friendly, natural and conversational.
 
-Return ONLY the answer.
+If the user asks an unrelated question, keep the refusal
+friendly and short.
+
+For unrelated questions, use a response similar to:
+
+"Main sirf STEM education, AI, robotics, electronics aur
+related technology questions mein help kar sakti hoon.
+Aap kya poochna chahenge?"
+
+Return ONLY the final answer.
 """
+
+    # ========================================================
+    # USER CONTENT
+    # ========================================================
 
     user_content = f"""
 Hindi speech recognition:
@@ -458,8 +676,18 @@ Hindi speech recognition:
 English speech recognition:
 {english_text if english_text else "No result"}
 
-Determine the intended meaning and answer naturally.
+Determine the user's intended meaning from the available
+speech recognition results.
+
+Answer according to your STEM, AI, robotics, electronics,
+embedded systems and aerospace specialization.
+
+Return only the final answer.
 """
+
+    # ========================================================
+    # PAYLOAD
+    # ========================================================
 
     payload = {
 
@@ -469,13 +697,19 @@ Determine the intended meaning and answer naturally.
         "messages": [
 
             {
-                "role": "system",
-                "content": system_prompt
+                "role":
+                    "system",
+
+                "content":
+                    system_prompt
             },
 
             {
-                "role": "user",
-                "content": user_content
+                "role":
+                    "user",
+
+                "content":
+                    user_content
             }
         ],
 
@@ -483,11 +717,15 @@ Determine the intended meaning and answer naturally.
             0.2,
 
         "max_completion_tokens":
-            200,
+            250,
 
         "stream":
             False
     }
+
+    # ========================================================
+    # HEADERS
+    # ========================================================
 
     headers = {
 
@@ -501,12 +739,26 @@ Determine the intended meaning and answer naturally.
             "application/json"
     }
 
+    # ========================================================
+    # REQUEST
+    # ========================================================
+
     try:
 
         print()
         print("========================================")
         print("AI REQUEST")
         print("========================================")
+
+        print(
+            "HINDI:",
+            hindi_text
+        )
+
+        print(
+            "ENGLISH:",
+            english_text
+        )
 
         response = requests.post(
 
@@ -525,7 +777,7 @@ Determine the intended meaning and answer naturally.
         )
 
         # ====================================================
-        # AI SERVER ERROR
+        # SERVER ERROR
         # ====================================================
 
         if response.status_code != 200:
@@ -538,12 +790,10 @@ Determine the intended meaning and answer naturally.
                 response.text[:3000]
             )
 
-            return (
-                "No AI response. Try again."
-            )
+            return AI_ERROR_MESSAGE
 
         # ====================================================
-        # JSON ERROR
+        # JSON
         # ====================================================
 
         try:
@@ -557,12 +807,10 @@ Determine the intended meaning and answer naturally.
                 str(e)
             )
 
-            return (
-                "No AI response. Try again."
-            )
+            return AI_ERROR_MESSAGE
 
         # ====================================================
-        # CHOICES CHECK
+        # CHOICES
         # ====================================================
 
         choices = data.get(
@@ -579,9 +827,7 @@ Determine the intended meaning and answer naturally.
                 data
             )
 
-            return (
-                "No AI response. Try again."
-            )
+            return AI_ERROR_MESSAGE
 
         # ====================================================
         # MESSAGE
@@ -613,10 +859,16 @@ Determine the intended meaning and answer naturally.
         # ====================================================
 
         prefixes = [
+
             "AI:",
+
             "Answer:",
+
             "Response:",
-            "Assistant:"
+
+            "Assistant:",
+
+            "Diana:"
         ]
 
         for prefix in prefixes:
@@ -630,14 +882,16 @@ Determine the intended meaning and answer naturally.
                 ].strip()
 
         # ====================================================
-        # EMPTY REPLY
+        # EMPTY RESPONSE
         # ====================================================
 
         if not reply:
 
-            return (
-                "No AI response. Try again."
+            print(
+                "AI ERROR: Empty response"
             )
+
+            return AI_ERROR_MESSAGE
 
         print()
         print("AI REPLY:")
@@ -657,26 +911,23 @@ Determine the intended meaning and answer naturally.
             "AI TIMEOUT"
         )
 
-        return (
-            "No AI response. Try again."
-        )
+        return AI_ERROR_MESSAGE
 
     # ========================================================
-    # CONNECTION ERROR
+    # CONNECTION
     # ========================================================
 
-    except requests.exceptions.ConnectionError:
+    except requests.exceptions.ConnectionError as e:
 
         print(
-            "AI CONNECTION ERROR"
+            "AI CONNECTION ERROR:",
+            str(e)
         )
 
-        return (
-            "No AI response. Try again."
-        )
+        return AI_ERROR_MESSAGE
 
     # ========================================================
-    # OTHER ERROR
+    # OTHER
     # ========================================================
 
     except Exception as e:
@@ -687,9 +938,9 @@ Determine the intended meaning and answer naturally.
             str(e)
         )
 
-        return (
-            "No AI response. Try again."
-        )
+        traceback.print_exc()
+
+        return AI_ERROR_MESSAGE
 
 
 # ============================================================
@@ -698,7 +949,6 @@ Determine the intended meaning and answer naturally.
 
 def generate_tts(text):
 
-    # Clean for TTS
     text = clean_tts_text(
         text
     )
@@ -740,7 +990,7 @@ def generate_tts(text):
         return None
 
     # ========================================================
-    # GROQ ORPHEUS PAYLOAD
+    # TTS PAYLOAD
     # ========================================================
 
     payload = {
@@ -1075,14 +1325,16 @@ def upload_audio():
             }), 400
 
         # ====================================================
-        # SAVE WAV
+        # SAVE AUDIO
         # ====================================================
 
         fd, filename = tempfile.mkstemp(
             suffix=".wav"
         )
 
-        os.close(fd)
+        os.close(
+            fd
+        )
 
         with open(
             filename,
@@ -1113,10 +1365,11 @@ def upload_audio():
             )
 
         hindi_text = None
+
         english_text = None
 
         # ====================================================
-        # HINDI RECOGNITION
+        # HINDI
         # ====================================================
 
         print()
@@ -1167,7 +1420,7 @@ def upload_audio():
             }), 500
 
         # ====================================================
-        # ENGLISH RECOGNITION
+        # ENGLISH
         # ====================================================
 
         print()
@@ -1359,7 +1612,7 @@ def upload_audio():
                 None,
 
             "ai_reply":
-                "No AI response. Try again."
+                AI_ERROR_MESSAGE
 
         }), 500
 
@@ -1399,7 +1652,7 @@ def test_tts():
 
     test_text = (
         "Hello, I am Diana. "
-        "How can I help you?"
+        "How can I help you with STEM, robotics, AI or electronics?"
     )
 
     audio_data = generate_tts(
@@ -1482,6 +1735,21 @@ if __name__ == "__main__":
         else "MISSING"
     )
 
+    print(
+        "ASSISTANT:",
+        "Diana"
+    )
+
+    print(
+        "COMPANY:",
+        "Avitron Aerospace Pvt. Ltd."
+    )
+
+    print(
+        "DOMAIN:",
+        "STEM | AI | Robotics | Electronics | Aerospace"
+    )
+
     print("========================================")
 
     app.run(
@@ -1492,3 +1760,4 @@ if __name__ == "__main__":
 
         threaded=True
     )
+
