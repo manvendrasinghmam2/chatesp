@@ -1,6 +1,6 @@
 Flask
 gunicorn
 SpeechRecognition
-gTTS
 groq
 requests
+piper-tts
