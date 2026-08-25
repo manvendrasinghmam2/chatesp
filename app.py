@@ -5,10 +5,10 @@ import requests
 import re
 import tempfile
 import traceback
-
+import threading
+import time
 
 app = Flask(__name__)
-
 
 # ============================================================
 # CONFIG
@@ -26,9 +26,8 @@ AI_MODEL = os.environ.get(
     "openai/gpt-oss-20b"
 )
 
-
 # ============================================================
-# GROQ TTS CONFIG
+# TTS CONFIG
 # ============================================================
 
 TTS_URL = os.environ.get(
@@ -41,21 +40,24 @@ TTS_MODEL = os.environ.get(
     "canopylabs/orpheus-v1-english"
 )
 
-# ============================================================
-# HANNAH VOICE
-# ============================================================
-
+# Hannah voice
 TTS_VOICE = os.environ.get(
     "TTS_VOICE",
     "hannah"
 )
 
+# Groq Orpheus maximum input
 TTS_MAX_CHARS = 200
 
+# ============================================================
+# MEMORY
+# ============================================================
 
-# ============================================================
-# STANDARD AI ERROR
-# ============================================================
+MAX_MEMORY_MESSAGES = 12
+MEMORY_TIMEOUT = 1800
+
+conversation_memory = {}
+memory_lock = threading.Lock()
 
 AI_ERROR_MESSAGE = "No AI response. Try again."
 
@@ -67,7 +69,7 @@ AI_ERROR_MESSAGE = "No AI response. Try again."
 @app.route("/", methods=["GET"])
 def home():
 
-    return "ESP32 Voice Server is ONLINE!"
+    return "Hannah Voice Server is ONLINE!"
 
 
 # ============================================================
@@ -79,35 +81,1628 @@ def health():
 
     return jsonify({
 
-        "status":
-            "online",
+        "status": "online",
+        "assistant": "Hannah",
 
-        "speech_engine":
-            "Google Speech Recognition",
+        "ai_model": AI_MODEL,
 
-        "ai_engine":
-            "Groq",
+        "tts_model": TTS_MODEL,
+
+        "tts_voice": TTS_VOICE,
+
+        "tts_max_chars": TTS_MAX_CHARS,
+
+        "memory": True
+
+    })
+
+
+# ============================================================
+# CLEAN TEXT
+# ============================================================
+
+def clean_text(text):
+
+    if text is None:
+        return ""
+
+    text = str(text).strip()
+
+    text = text.replace("```", "")
+
+    text = re.sub(
+        r"[\r\n]+",
+        " ",
+        text
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
+    return text.strip()
+
+
+# ============================================================
+# VALID QUERY
+# ============================================================
+
+def is_valid_query(text):
+
+    if not text:
+        return False
+
+    text = str(text).strip()
+
+    if len(text) < 2:
+        return False
+
+    bad_values = [
+        "unknown",
+        "none",
+        "null",
+        "no response",
+        "no valid query",
+        "speech not understood"
+    ]
+
+    if text.lower() in bad_values:
+        return False
+
+    return True
+
+
+# ============================================================
+# SESSION
+# ============================================================
+
+def get_session_id():
+
+    session_id = request.headers.get(
+        "X-Session-ID"
+    )
+
+    if session_id:
+        return clean_session_id(
+            session_id
+        )
+
+    try:
+
+        data = request.get_json(
+            silent=True
+        )
+
+        if data:
+
+            session_id = data.get(
+                "session_id"
+            )
+
+            if session_id:
+
+                return clean_session_id(
+                    session_id
+                )
+
+    except Exception:
+        pass
+
+    return "default"
+
+
+def clean_session_id(session_id):
+
+    if not session_id:
+        return "default"
+
+    session_id = str(
+        session_id
+    ).strip()
+
+    session_id = re.sub(
+        r"[^a-zA-Z0-9_\-]",
+        "_",
+        session_id
+    )
+
+    return session_id[:100] or "default"
+
+
+# ============================================================
+# MEMORY CLEANUP
+# ============================================================
+
+def cleanup_memory():
+
+    current_time = time.time()
+
+    with memory_lock:
+
+        expired = []
+
+        for session_id, data in conversation_memory.items():
+
+            last_activity = data.get(
+                "last_activity",
+                0
+            )
+
+            if (
+                current_time - last_activity
+                >
+                MEMORY_TIMEOUT
+            ):
+
+                expired.append(
+                    session_id
+                )
+
+        for session_id in expired:
+
+            del conversation_memory[
+                session_id
+            ]
+
+
+# ============================================================
+# GET MEMORY
+# ============================================================
+
+def get_memory(session_id):
+
+    cleanup_memory()
+
+    with memory_lock:
+
+        data = conversation_memory.get(
+            session_id
+        )
+
+        if not data:
+            return []
+
+        return list(
+            data.get(
+                "messages",
+                []
+            )
+        )
+
+
+# ============================================================
+# ADD MEMORY
+# ============================================================
+
+def add_memory(
+    session_id,
+    role,
+    content
+):
+
+    content = clean_text(
+        content
+    )
+
+    if not content:
+        return
+
+    with memory_lock:
+
+        if session_id not in conversation_memory:
+
+            conversation_memory[
+                session_id
+            ] = {
+
+                "messages": [],
+
+                "last_activity":
+                    time.time()
+
+            }
+
+        messages = conversation_memory[
+            session_id
+        ]["messages"]
+
+        messages.append({
+
+            "role": role,
+
+            "content": content
+
+        })
+
+        if len(messages) > MAX_MEMORY_MESSAGES:
+
+            conversation_memory[
+                session_id
+            ]["messages"] = messages[
+                -MAX_MEMORY_MESSAGES:
+            ]
+
+        conversation_memory[
+            session_id
+        ]["last_activity"] = time.time()
+
+
+# ============================================================
+# CLEAR MEMORY
+# ============================================================
+
+@app.route(
+    "/clear-memory",
+    methods=["GET", "POST"]
+)
+def clear_memory():
+
+    session_id = get_session_id()
+
+    with memory_lock:
+
+        existed = (
+            session_id
+            in conversation_memory
+        )
+
+        if existed:
+
+            del conversation_memory[
+                session_id
+            ]
+
+    return jsonify({
+
+        "status": "ok",
+
+        "session_id":
+            session_id,
+
+        "memory_cleared":
+            existed
+
+    })
+
+
+# ============================================================
+# LANGUAGE DETECTION
+# ============================================================
+
+def detect_user_language(
+    hindi_text,
+    english_text
+):
+
+    hindi_text = clean_text(
+        hindi_text
+    ).lower()
+
+    english_text = clean_text(
+        english_text
+    ).lower()
+
+    # --------------------------------------------------------
+    # English spoken but Google Hindi recognition
+    # --------------------------------------------------------
+
+    english_devanagari = [
+
+        "हाउ आर यू",
+        "हाउ आरयू",
+        "व्हाट इज योर नेम",
+        "व्हाट्स योर नेम",
+        "व्हाट इज योर",
+        "व्हेयर आर यू",
+        "व्हाट कैन यू डू",
+        "हाउ डू यू डू",
+        "गुड मॉर्निंग",
+        "गुड आफ्टरनून",
+        "गुड इवनिंग",
+        "गुड नाइट",
+        "थैंक यू",
+        "थैंक्यू",
+        "आई एम फाइन",
+        "आई एम गुड",
+        "आई एम ओके",
+        "सी यू",
+        "हैलो",
+        "हेलो",
+        "हाय",
+        "टेल मी",
+        "व्हाट इज",
+        "व्हाट आर",
+        "व्हाई",
+        "व्हेन",
+        "व्हेयर",
+        "हू आर",
+        "कैन यू",
+        "कुड यू",
+        "प्लीज",
+        "एक्सप्लेन"
+    ]
+
+    for phrase in english_devanagari:
+
+        if phrase in hindi_text:
+
+            return "english"
+
+    # --------------------------------------------------------
+    # English words
+    # --------------------------------------------------------
+
+    english_words = {
+
+        "how",
+        "are",
+        "you",
+        "what",
+        "is",
+        "your",
+        "name",
+        "who",
+        "where",
+        "why",
+        "when",
+        "can",
+        "could",
+        "would",
+        "tell",
+        "about",
+        "explain",
+        "please",
+        "hello",
+        "hi",
+        "hey",
+        "good",
+        "morning",
+        "evening",
+        "night",
+        "thank",
+        "thanks",
+        "robotics",
+        "robot",
+        "electronics",
+        "artificial",
+        "intelligence",
+        "aerospace",
+        "technology",
+        "stem",
+        "education",
+        "work",
+        "working",
+        "help"
+
+    }
+
+    english_count = 0
+
+    for word in english_text.split():
+
+        word = re.sub(
+            r"[^a-zA-Z]",
+            "",
+            word
+        )
+
+        if word in english_words:
+
+            english_count += 1
+
+    # --------------------------------------------------------
+    # Roman Hindi
+    # --------------------------------------------------------
+
+    roman_hindi_words = {
+
+        "kya",
+        "kaise",
+        "kaisa",
+        "kaisi",
+        "aap",
+        "aapko",
+        "mujhe",
+        "mujhko",
+        "mera",
+        "meri",
+        "mere",
+        "hamara",
+        "humara",
+        "batao",
+        "bataiye",
+        "hai",
+        "hain",
+        "hoon",
+        "hun",
+        "mein",
+        "me",
+        "ka",
+        "ki",
+        "ke",
+        "ko",
+        "se",
+        "par",
+        "kyun",
+        "kyon",
+        "kab",
+        "kahan",
+        "kar",
+        "karo",
+        "karna",
+        "karta",
+        "karte",
+        "karti",
+        "bata",
+        "chahiye",
+        "chahta",
+        "chahti",
+        "ye",
+        "yah",
+        "woh",
+        "vo",
+        "iska",
+        "iske",
+        "uska",
+        "uske",
+        "aapka",
+        "aapki",
+        "aapke"
+
+    }
+
+    roman_count = 0
+
+    for word in hindi_text.split():
+
+        word = re.sub(
+            r"[^a-zA-Z]",
+            "",
+            word
+        )
+
+        if word in roman_hindi_words:
+
+            roman_count += 1
+
+    if roman_count >= 1 and english_count >= 1:
+
+        return "hinglish"
+
+    if english_count >= 1:
+
+        return "english"
+
+    if roman_count >= 1:
+
+        return "hindi"
+
+    if hindi_text:
+
+        return "hindi"
+
+    if english_text:
+
+        return "english"
+
+    return "unknown"
+
+
+# ============================================================
+# TTS CLEANING
+# ============================================================
+
+def clean_tts_text(text):
+
+    text = clean_text(
+        text
+    )
+
+    if not text:
+        return ""
+
+    prefixes = [
+
+        "AI:",
+        "Answer:",
+        "Response:",
+        "Assistant:",
+        "Hannah:"
+
+    ]
+
+    for prefix in prefixes:
+
+        if text.lower().startswith(
+            prefix.lower()
+        ):
+
+            text = text[
+                len(prefix):
+            ].strip()
+
+    text = text.replace(
+        "**",
+        ""
+    )
+
+    text = text.replace(
+        "__",
+        ""
+    )
+
+    text = text.replace(
+        "*",
+        ""
+    )
+
+    # Remove Devanagari for English TTS
+    text = re.sub(
+        r"[\u0900-\u097F]+",
+        " ",
+        text
+    )
+
+    # Remove unusual characters
+    text = re.sub(
+        r"[^\x00-\x7F]+",
+        " ",
+        text
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
+    text = text.strip()
+
+    # ========================================================
+    # MAX 200 CHARACTERS
+    # ========================================================
+
+    if len(text) > TTS_MAX_CHARS:
+
+        text = text[
+            :TTS_MAX_CHARS
+        ]
+
+        last_space = text.rfind(
+            " "
+        )
+
+        if last_space > 80:
+
+            text = text[
+                :last_space
+            ]
+
+        positions = [
+
+            text.rfind("."),
+
+            text.rfind("?"),
+
+            text.rfind("!"),
+
+            text.rfind(",")
+
+        ]
+
+        best = max(
+            positions
+        )
+
+        if best >= 60:
+
+            text = text[
+                :best + 1
+            ]
+
+    return text.strip()
+
+
+# ============================================================
+# AI
+# ============================================================
+
+def get_ai_reply(
+    hindi_text,
+    english_text,
+    session_id
+):
+
+    hindi_text = clean_text(
+        hindi_text
+    )
+
+    english_text = clean_text(
+        english_text
+    )
+
+    if not AI_API_KEY:
+
+        print(
+            "AI_API_KEY MISSING"
+        )
+
+        return AI_ERROR_MESSAGE
+
+    if (
+        not is_valid_query(hindi_text)
+        and
+        not is_valid_query(english_text)
+    ):
+
+        return (
+            "Please ask your question again."
+        )
+
+    detected_language = detect_user_language(
+
+        hindi_text,
+
+        english_text
+
+    )
+
+    print(
+        "DETECTED LANGUAGE:",
+        detected_language
+    )
+
+    # ========================================================
+    # SYSTEM PROMPT
+    # ========================================================
+
+    system_prompt = """
+
+You are Hannah, a friendly female voice assistant for
+Avitron Aerospace Pvt. Ltd.
+
+Your main expertise is:
+
+STEM education,
+Artificial Intelligence,
+AI,
+Robotics,
+Electronics,
+Embedded systems,
+ESP32,
+Arduino,
+Microcontrollers,
+Sensors,
+Programming,
+Science,
+Technology,
+Aerospace,
+Educational technology.
+
+You can also answer basic conversation questions.
+
+For example:
+
+How are you?
+I am doing great. How can I help you?
+
+What is your name?
+My name is Hannah.
+
+Who are you?
+I am Hannah, a voice assistant for Avitron Aerospace.
+
+============================================================
+LANGUAGE RULE
+============================================================
+
+If CURRENT LANGUAGE is ENGLISH:
+Answer ONLY in English.
+
+If CURRENT LANGUAGE is HINDI:
+Answer in natural Hindi using Roman English letters.
+
+If CURRENT LANGUAGE is HINGLISH:
+Answer in natural Hinglish.
+
+NEVER use Devanagari in your answer.
+
+============================================================
+IMPORTANT
+============================================================
+
+Google Hindi speech recognition can sometimes write
+English words using Hindi/Devanagari.
+
+Example:
+
+हाउ आर यू
+
+means:
+
+How are you?
+
+Therefore answer:
+
+I am doing great. How can I help you?
+
+NOT:
+
+Main theek hoon.
+
+Another example:
+
+व्हाट इज योर नेम
+
+Answer:
+
+My name is Hannah.
+
+NOT:
+
+Mera naam Hannah hai.
+
+============================================================
+REAL HINDI
+============================================================
+
+आप कैसे हो
+
+Answer:
+
+Main bilkul theek hoon. Aap kaise hain?
+
+रोबोटिक्स क्या है
+
+Answer in Roman Hindi.
+
+============================================================
+HINGLISH
+============================================================
+
+Robotics kya hai?
+
+Answer naturally in Hinglish.
+
+AI kya hota hai and how does it work?
+
+Answer naturally in Hinglish.
+
+============================================================
+DOMAIN
+============================================================
+
+Focus mainly on:
+
+STEM education
+AI
+Robotics
+Electronics
+Embedded systems
+ESP32
+Arduino
+Sensors
+Programming
+Science
+Technology
+Aerospace
+
+============================================================
+UNRELATED QUESTIONS
+============================================================
+
+If the question is completely unrelated:
+
+English:
+I can help with STEM education, AI, robotics, electronics and related technology. What would you like to ask?
+
+Hindi:
+Main STEM education, AI, robotics, electronics aur related technology mein help kar sakti hoon. Aap kya poochna chahenge?
+
+============================================================
+MEMORY
+============================================================
+
+Use previous conversation context.
+
+If user says:
+
+Tell me more.
+Explain that.
+What about this?
+How does it work?
+Iske baare mein batao.
+Ye kaise kaam karta hai?
+
+Use previous conversation.
+
+Do not unnecessarily ask user to repeat.
+
+============================================================
+VOICE STYLE
+============================================================
+
+Be friendly and natural.
+
+Basic questions:
+Keep answers short.
+
+Technical questions:
+Give useful answers.
+
+No markdown.
+No bullet points.
+No headings.
+No emojis.
+Do not repeat the question.
+Do not say "As an AI".
+
+Return ONLY the answer.
+"""
+
+    # ========================================================
+    # MEMORY
+    # ========================================================
+
+    previous_messages = get_memory(
+        session_id
+    )
+
+    messages = [
+
+        {
+            "role":
+                "system",
+
+            "content":
+                system_prompt
+        }
+
+    ]
+
+    for item in previous_messages:
+
+        messages.append({
+
+            "role":
+                item["role"],
+
+            "content":
+                item["content"]
+
+        })
+
+    # ========================================================
+    # CURRENT QUERY
+    # ========================================================
+
+    user_content = f"""
+
+CURRENT USER QUERY:
+
+Hindi speech recognition:
+{hindi_text if hindi_text else "No result"}
+
+English speech recognition:
+{english_text if english_text else "No result"}
+
+CURRENT LANGUAGE:
+{detected_language}
+
+If language is english:
+answer in English.
+
+If language is hindi:
+answer in Roman Hindi.
+
+If language is hinglish:
+answer in Hinglish.
+
+Remember that Devanagari may contain English phonetic speech.
+
+Example:
+
+हाउ आर यू
+
+must be treated as English.
+
+Answer ONLY the current question.
+"""
+
+    messages.append({
+
+        "role":
+            "user",
+
+        "content":
+            user_content
+
+    })
+
+    payload = {
 
         "model":
             AI_MODEL,
 
-        "tts_engine":
-            "Groq Orpheus",
+        "messages":
+            messages,
 
-        "tts_model":
+        "temperature":
+            0.2,
+
+        "max_completion_tokens":
+            500,
+
+        "stream":
+            False
+
+    }
+
+    headers = {
+
+        "Authorization":
+            "Bearer " + AI_API_KEY,
+
+        "Content-Type":
+            "application/json",
+
+        "Accept":
+            "application/json"
+
+    }
+
+    try:
+
+        print()
+        print("========================================")
+        print("AI REQUEST")
+        print("========================================")
+
+        print(
+            "SESSION:",
+            session_id
+        )
+
+        print(
+            "LANGUAGE:",
+            detected_language
+        )
+
+        response = requests.post(
+
+            AI_URL,
+
+            headers=headers,
+
+            json=payload,
+
+            timeout=35
+
+        )
+
+        print(
+            "AI HTTP:",
+            response.status_code
+        )
+
+        if response.status_code != 200:
+
+            print(
+                "AI SERVER ERROR:"
+            )
+
+            print(
+                response.text[:5000]
+            )
+
+            return AI_ERROR_MESSAGE
+
+        try:
+
+            data = response.json()
+
+        except Exception:
+
+            print(
+                "AI JSON ERROR"
+            )
+
+            return AI_ERROR_MESSAGE
+
+        choices = data.get(
+            "choices"
+        )
+
+        if not choices:
+
+            print(
+                "AI CHOICES MISSING"
+            )
+
+            print(
+                data
+            )
+
+            return AI_ERROR_MESSAGE
+
+        message = choices[0].get(
+            "message",
+            {}
+        )
+
+        reply = message.get(
+            "content",
+            ""
+        )
+
+        if reply is None:
+            reply = ""
+
+        reply = clean_text(
+            reply
+        )
+
+        for prefix in [
+
+            "AI:",
+            "Answer:",
+            "Response:",
+            "Assistant:",
+            "Hannah:"
+
+        ]:
+
+            if reply.lower().startswith(
+                prefix.lower()
+            ):
+
+                reply = reply[
+                    len(prefix):
+                ].strip()
+
+        if not reply:
+
+            return AI_ERROR_MESSAGE
+
+        # ====================================================
+        # SAVE MEMORY
+        # ====================================================
+
+        if detected_language == "english":
+
+            user_memory = (
+
+                english_text
+
+                if is_valid_query(
+                    english_text
+                )
+
+                else hindi_text
+
+            )
+
+        else:
+
+            user_memory = (
+
+                hindi_text
+
+                if is_valid_query(
+                    hindi_text
+                )
+
+                else english_text
+
+            )
+
+        if user_memory:
+
+            add_memory(
+
+                session_id,
+
+                "user",
+
+                user_memory
+
+            )
+
+        add_memory(
+
+            session_id,
+
+            "assistant",
+
+            reply
+
+        )
+
+        print()
+        print("AI REPLY:")
+        print(reply)
+
+        print(
+            "AI REPLY LENGTH:",
+            len(reply)
+        )
+
+        print("========================================")
+
+        return reply
+
+    except requests.exceptions.Timeout:
+
+        print(
+            "AI TIMEOUT"
+        )
+
+        return AI_ERROR_MESSAGE
+
+    except requests.exceptions.ConnectionError as e:
+
+        print(
+            "AI CONNECTION ERROR:",
+            str(e)
+        )
+
+        return AI_ERROR_MESSAGE
+
+    except Exception as e:
+
+        print(
+            "AI ERROR:",
+            type(e).__name__,
+            str(e)
+        )
+
+        traceback.print_exc()
+
+        return AI_ERROR_MESSAGE
+
+
+# ============================================================
+# TTS
+# ============================================================
+
+def generate_tts(text):
+
+    print()
+    print("========================================")
+    print("TTS REQUEST")
+    print("========================================")
+
+    text = clean_tts_text(
+        text
+    )
+
+    print(
+        "TTS TEXT:",
+        text
+    )
+
+    print(
+        "TTS TEXT LENGTH:",
+        len(text)
+    )
+
+    print(
+        "TTS MODEL:",
+        TTS_MODEL
+    )
+
+    print(
+        "TTS VOICE:",
+        TTS_VOICE
+    )
+
+    if not text:
+
+        print(
+            "TTS ERROR: EMPTY TEXT"
+        )
+
+        return None
+
+    if not AI_API_KEY:
+
+        print(
+            "TTS ERROR: AI_API_KEY MISSING"
+        )
+
+        return None
+
+    # ========================================================
+    # GROQ TTS PAYLOAD
+    # ========================================================
+
+    payload = {
+
+        "model":
             TTS_MODEL,
 
-        "tts_voice":
+        "input":
+            text,
+
+        "voice":
             TTS_VOICE,
 
-        "assistant":
-            "Diana",
+        "response_format":
+            "wav"
 
-        "company":
-            "Avitron Aerospace Pvt. Ltd.",
+    }
 
-        "domain":
-            "STEM Education, Robotics, AI, Electronics, Aerospace"
+    headers = {
+
+        "Authorization":
+            "Bearer " + AI_API_KEY,
+
+        "Content-Type":
+            "application/json",
+
+        "Accept":
+            "audio/wav"
+
+    }
+
+    try:
+
+        print(
+            "SENDING TTS REQUEST..."
+        )
+
+        response = requests.post(
+
+            TTS_URL,
+
+            headers=headers,
+
+            json=payload,
+
+            timeout=60
+
+        )
+
+        print(
+            "TTS HTTP:",
+            response.status_code
+        )
+
+        print(
+            "TTS CONTENT TYPE:",
+            response.headers.get(
+                "Content-Type"
+            )
+        )
+
+        print(
+            "TTS CONTENT LENGTH:",
+            response.headers.get(
+                "Content-Length",
+                "-1"
+            )
+        )
+
+        print(
+            "TTS TRANSFER:",
+            response.headers.get(
+                "Transfer-Encoding",
+                "none"
+            )
+        )
+
+        # ====================================================
+        # SUCCESS
+        # ====================================================
+
+        if response.status_code == 200:
+
+            audio_data = response.content
+
+            if not audio_data:
+
+                print(
+                    "TTS ERROR: EMPTY AUDIO"
+                )
+
+                return None
+
+            print(
+                "TTS AUDIO BYTES:",
+                len(audio_data)
+            )
+
+            print(
+                "TTS SUCCESS"
+            )
+
+            print("========================================")
+
+            return audio_data
+
+        # ====================================================
+        # FULL ERROR
+        # ====================================================
+
+        print()
+        print("========================================")
+        print("TTS SERVER ERROR")
+        print("========================================")
+
+        print(
+            "HTTP CODE:",
+            response.status_code
+        )
+
+        print(
+            "RESPONSE HEADERS:"
+        )
+
+        print(
+            dict(response.headers)
+        )
+
+        print(
+            "ERROR BODY:"
+        )
+
+        try:
+
+            print(
+                response.text[:10000]
+            )
+
+        except Exception as e:
+
+            print(
+                "ERROR READING BODY:",
+                str(e)
+            )
+
+        print("========================================")
+
+        return None
+
+    except requests.exceptions.Timeout:
+
+        print(
+            "TTS TIMEOUT"
+        )
+
+        return None
+
+    except requests.exceptions.ConnectionError as e:
+
+        print(
+            "TTS CONNECTION ERROR:",
+            str(e)
+        )
+
+        return None
+
+    except Exception as e:
+
+        print(
+            "TTS EXCEPTION:",
+            type(e).__name__,
+            str(e)
+        )
+
+        traceback.print_exc()
+
+        return None
+
+
+# ============================================================
+# TTS ENDPOINT
+# ============================================================
+
+@app.route(
+    "/tts",
+    methods=["POST"]
+)
+def tts():
+
+    print()
+    print("========================================")
+    print("TTS ENDPOINT")
+    print("========================================")
+
+    try:
+
+        data = request.get_json(
+            silent=True
+        )
+
+        if not data:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "No JSON received"
+
+            }), 400
+
+        print(
+            "TTS JSON:",
+            data
+        )
+
+        text = clean_text(
+            data.get("text")
+        )
+
+        if not text:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "No text received"
+
+            }), 400
+
+        audio_data = generate_tts(
+            text
+        )
+
+        if audio_data is None:
+
+            return jsonify({
+
+                "status":
+                    "error",
+
+                "message":
+                    "TTS generation failed",
+
+                "model":
+                    TTS_MODEL,
+
+                "voice":
+                    TTS_VOICE
+
+            }), 500
+
+        return Response(
+
+            audio_data,
+
+            status=200,
+
+            mimetype="audio/wav",
+
+            headers={
+
+                "Cache-Control":
+                    "no-cache",
+
+                "Content-Disposition":
+                    "inline; filename=hannah.wav"
+
+            }
+
+        )
+
+    except Exception as e:
+
+        print(
+            "TTS ENDPOINT ERROR:",
+            str(e)
+        )
+
+        traceback.print_exc()
+
+        return jsonify({
+
+            "status":
+                "error",
+
+            "message":
+                str(e)
+
+        }), 500
+
+
+# ============================================================
+# DIRECT TTS TEST
+# ============================================================
+
+@app.route(
+    "/test-tts",
+    methods=["GET"]
+)
+def test_tts():
+
+    print()
+    print("========================================")
+    print("DIRECT HANNAH TTS TEST")
+    print("========================================")
+
+    test_text = (
+        "Hello, I am Hannah. "
+        "How can I help you today?"
+    )
+
+    audio_data = generate_tts(
+        test_text
+    )
+
+    if audio_data is None:
+
+        return jsonify({
+
+            "status":
+                "error",
+
+            "message":
+                "TTS test failed",
+
+            "model":
+                TTS_MODEL,
+
+            "voice":
+                TTS_VOICE
+
+        }), 500
+
+    return Response(
+
+        audio_data,
+
+        status=200,
+
+        mimetype="audio/wav",
+
+        headers={
+
+            "Cache-Control":
+                "no-cache",
+
+            "Content-Disposition":
+                "inline; filename=hannah-test.wav"
+
+        }
+
+    )
+
+
+# ============================================================
+# MEMORY STATUS
+# ============================================================
+
+@app.route(
+    "/memory-status",
+    methods=["GET", "POST"]
+)
+def memory_status():
+
+    session_id = get_session_id()
+
+    memory = get_memory(
+        session_id
+    )
+
+    return jsonify({
+
+        "status":
+            "ok",
+
+        "session_id":
+            session_id,
+
+        "messages":
+            len(memory),
+
+        "conversation":
+            memory
 
     })
 
@@ -122,21 +1717,16 @@ def health():
 )
 def wake():
 
-    print()
-    print("========================================")
-    print("WAKE REQUEST RECEIVED")
-    print("========================================")
-
     try:
 
         audio_data = request.get_data()
 
         print(
-            "AUDIO BYTES:",
+            "WAKE AUDIO BYTES:",
             len(audio_data)
         )
 
-        response_data = {
+        return jsonify({
 
             "status":
                 "ok",
@@ -149,25 +1739,10 @@ def wake():
 
             "hindi":
                 None
-        }
 
-        print(
-            "WAKE RESPONSE:",
-            response_data
-        )
-
-        print("========================================")
-
-        return jsonify(
-            response_data
-        )
+        })
 
     except Exception as e:
-
-        print(
-            "WAKE ERROR:",
-            str(e)
-        )
 
         return jsonify({
 
@@ -213,9 +1788,6 @@ def test():
             "status":
                 "ok",
 
-            "message":
-                "Data received",
-
             "data":
                 data
 
@@ -235,1063 +1807,7 @@ def test():
 
 
 # ============================================================
-# CLEAN TEXT
-# ============================================================
-
-def clean_text(text):
-
-    if text is None:
-        return ""
-
-    text = str(text)
-
-    text = text.strip()
-
-    text = text.replace(
-        "```",
-        ""
-    )
-
-    text = re.sub(
-        r"[\r\n]+",
-        " ",
-        text
-    )
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
-
-    return text.strip()
-
-
-# ============================================================
-# TTS TEXT CLEANING
-# ============================================================
-
-def clean_tts_text(text):
-
-    text = clean_text(
-        text
-    )
-
-    if not text:
-        return ""
-
-    prefixes = [
-
-        "AI:",
-        "Answer:",
-        "Response:",
-        "Assistant:",
-        "Diana:"
-    ]
-
-    for prefix in prefixes:
-
-        if text.lower().startswith(
-            prefix.lower()
-        ):
-
-            text = text[
-                len(prefix):
-            ].strip()
-
-    text = text.replace(
-        "**",
-        ""
-    )
-
-    text = text.replace(
-        "__",
-        ""
-    )
-
-    text = text.replace(
-        "*",
-        ""
-    )
-
-    # Remove unusual Unicode symbols
-    text = re.sub(
-        r"[^\x00-\x7F]+",
-        " ",
-        text
-    )
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
-    )
-
-    text = text.strip()
-
-    if len(text) > TTS_MAX_CHARS:
-
-        text = text[
-            :TTS_MAX_CHARS
-        ]
-
-        positions = [
-
-            text.rfind("."),
-
-            text.rfind("?"),
-
-            text.rfind("!"),
-
-            text.rfind(",")
-        ]
-
-        best = max(
-            positions
-        )
-
-        if best >= 40:
-
-            text = text[
-                :best + 1
-            ]
-
-    return text.strip()
-
-
-# ============================================================
-# VALID QUERY
-# ============================================================
-
-def is_valid_query(text):
-
-    if not text:
-        return False
-
-    text = str(
-        text
-    ).strip()
-
-    if len(text) < 2:
-        return False
-
-    bad_values = [
-
-        "unknown",
-        "none",
-        "null",
-        "no response",
-        "no valid query",
-        "speech not understood"
-    ]
-
-    if text.lower() in bad_values:
-        return False
-
-    return True
-
-
-# ============================================================
-# AI
-# ============================================================
-
-def get_ai_reply(
-    hindi_text,
-    english_text
-):
-
-    hindi_text = clean_text(
-        hindi_text
-    )
-
-    english_text = clean_text(
-        english_text
-    )
-
-    # ========================================================
-    # API KEY
-    # ========================================================
-
-    if not AI_API_KEY:
-
-        print(
-            "AI ERROR: AI_API_KEY missing"
-        )
-
-        return AI_ERROR_MESSAGE
-
-    # ========================================================
-    # QUERY CHECK
-    # ========================================================
-
-    if (
-        not is_valid_query(hindi_text)
-        and
-        not is_valid_query(english_text)
-    ):
-
-        return (
-            "Please ask your question again."
-        )
-
-    # ========================================================
-    # DIANA SYSTEM PROMPT
-    # ========================================================
-
-    system_prompt = """
-You are Diana, a friendly female voice assistant for
-Avitron Aerospace Pvt. Ltd.
-
-You are designed for voice interaction.
-
-============================================================
-MAIN AREAS
-============================================================
-
-Your main knowledge and assistance areas are:
-
-STEM education.
-Robotics.
-Artificial Intelligence.
-AI projects.
-Electronics.
-Embedded systems.
-ESP32.
-Arduino.
-Microcontrollers.
-Sensors.
-Actuators.
-Robotics projects.
-AI and machine learning education.
-Electronics projects.
-Programming related to robotics, AI and electronics.
-Science and technology education.
-Aerospace technology.
-Educational aerospace technology.
-Avitron Aerospace Pvt. Ltd.
-
-============================================================
-BASIC CONVERSATION IS ALLOWED
-============================================================
-
-You can also answer normal basic conversational questions
-about yourself and simple greetings.
-
-Examples:
-
-Hello
-Hi
-Hey
-Good morning
-Good evening
-How are you?
-How are you doing?
-What is your name?
-Who are you?
-What can you do?
-Who made you?
-Thank you
-Thanks
-Goodbye
-Bye
-Nice to meet you
-
-Examples:
-
-User:
-Hello
-
-Good:
-Hello! How can I help you today?
-
-User:
-How are you?
-
-Good:
-I am doing great. How can I help you?
-
-User:
-What is your name?
-
-Good:
-My name is Diana.
-
-User:
-Who are you?
-
-Good:
-I am Diana, a voice assistant for Avitron Aerospace.
-
-User:
-What can you do?
-
-Good:
-I can help with STEM education, AI, robotics, electronics
-and related technology.
-
-User:
-Thank you.
-
-Good:
-You're welcome!
-
-User:
-Goodbye.
-
-Good:
-Goodbye! Have a great day.
-
-============================================================
-DOMAIN RULE
-============================================================
-
-If the user's question is related to STEM education,
-robotics, AI, electronics, embedded systems, aerospace
-or Avitron Aerospace Pvt. Ltd., answer helpfully.
-
-Basic conversational questions are also allowed.
-
-If the question is completely unrelated to these areas and
-is not a basic conversational question, do not answer it.
-
-Instead politely say:
-
-"I can help with STEM education, AI, robotics, electronics
-and related technology. What would you like to learn?"
-
-============================================================
-LANGUAGE RULE
-============================================================
-
-The user may speak:
-
-English.
-Hindi.
-Hinglish.
-Roman Hindi.
-
-Understand the intended meaning.
-
-If the user speaks English:
-answer in natural English.
-
-If the user speaks Hindi:
-answer in natural Roman Hindi or Hinglish.
-
-If the user speaks Hinglish:
-answer in natural Hinglish.
-
-IMPORTANT:
-
-Never use Devanagari Hindi script.
-
-Hindi must ALWAYS be written using English/Roman letters.
-
-Examples:
-
-User:
-Aap kaise ho?
-
-Good:
-Main bilkul theek hoon. Aap kaise hain?
-
-User:
-Aapka naam kya hai?
-
-Good:
-Mera naam Diana hai.
-
-User:
-Aap kya kar sakti ho?
-
-Good:
-Main STEM education, AI, robotics aur electronics mein
-aapki madad kar sakti hoon.
-
-User:
-Robotics kya hoti hai?
-
-Good:
-Robotics ek technology field hai jisme robots ko design,
-build aur program kiya jata hai.
-
-User:
-ESP32 kya hai?
-
-Good:
-ESP32 ek powerful microcontroller hai jo robotics aur
-IoT projects mein kaafi useful hai.
-
-============================================================
-AVITRON RULE
-============================================================
-
-If the user asks specifically about Avitron Aerospace Pvt. Ltd.,
-only provide information that is actually known.
-
-Never invent:
-
-Company facts.
-Courses.
-Products.
-Facilities.
-Employees.
-Addresses.
-Achievements.
-Programs.
-Certifications.
-Partnerships.
-
-If you do not know a specific Avitron fact, say:
-
-"Is information ke baare mein mere paas abhi exact details
-nahi hain. Aap Avitron ke STEM, robotics, AI, electronics
-ya aerospace programs ke baare mein pooch sakte hain."
-
-============================================================
-TECHNICAL ANSWER RULE
-============================================================
-
-For beginner questions:
-explain simply.
-
-For technical questions:
-give accurate and practical information.
-
-For project questions:
-give useful components and steps when appropriate.
-
-Do not unnecessarily make answers complicated.
-
-============================================================
-VOICE STYLE
-============================================================
-
-You are a voice assistant.
-
-Keep answers natural and easy to speak.
-
-Usually use one or two short sentences.
-
-Technical questions can use up to three short sentences
-when necessary.
-
-Keep answers under about 180 characters whenever possible.
-
-No markdown.
-
-No bullet points.
-
-No emojis.
-
-No headings.
-
-Do not repeat the user's question.
-
-Do not say "As an AI".
-
-Sound friendly, warm and conversational.
-
-Do not sound robotic.
-
-============================================================
-UNRELATED QUESTION RESPONSE
-============================================================
-
-If the user asks something unrelated, respond politely.
-
-English:
-
-"I can help with STEM education, AI, robotics, electronics
-and related technology. What would you like to learn?"
-
-Hindi/Hinglish:
-
-"Main STEM education, AI, robotics, electronics aur related
-technology mein help kar sakti hoon. Aap kya poochna chahenge?"
-
-============================================================
-
-Return ONLY the final answer.
-"""
-
-    # ========================================================
-    # USER CONTENT
-    # ========================================================
-
-    user_content = f"""
-Hindi speech recognition:
-{hindi_text if hindi_text else "No result"}
-
-English speech recognition:
-{english_text if english_text else "No result"}
-
-Understand the user's intended meaning.
-
-Answer naturally according to Diana's rules.
-
-Return only the final answer.
-"""
-
-    # ========================================================
-    # PAYLOAD
-    # ========================================================
-
-    payload = {
-
-        "model":
-            AI_MODEL,
-
-        "messages": [
-
-            {
-                "role":
-                    "system",
-
-                "content":
-                    system_prompt
-            },
-
-            {
-                "role":
-                    "user",
-
-                "content":
-                    user_content
-            }
-        ],
-
-        "temperature":
-            0.2,
-
-        "max_completion_tokens":
-            250,
-
-        "stream":
-            False
-    }
-
-    # ========================================================
-    # HEADERS
-    # ========================================================
-
-    headers = {
-
-        "Authorization":
-            "Bearer " + AI_API_KEY,
-
-        "Content-Type":
-            "application/json",
-
-        "Accept":
-            "application/json"
-    }
-
-    # ========================================================
-    # AI REQUEST
-    # ========================================================
-
-    try:
-
-        print()
-        print("========================================")
-        print("AI REQUEST")
-        print("========================================")
-
-        print(
-            "HINDI:",
-            hindi_text
-        )
-
-        print(
-            "ENGLISH:",
-            english_text
-        )
-
-        response = requests.post(
-
-            AI_URL,
-
-            headers=headers,
-
-            json=payload,
-
-            timeout=35
-        )
-
-        print(
-            "AI HTTP:",
-            response.status_code
-        )
-
-        # ====================================================
-        # AI SERVER ERROR
-        # ====================================================
-
-        if response.status_code != 200:
-
-            print(
-                "AI SERVER ERROR:"
-            )
-
-            print(
-                response.text[:3000]
-            )
-
-            return AI_ERROR_MESSAGE
-
-        # ====================================================
-        # JSON ERROR
-        # ====================================================
-
-        try:
-
-            data = response.json()
-
-        except Exception as e:
-
-            print(
-                "AI JSON ERROR:",
-                str(e)
-            )
-
-            return AI_ERROR_MESSAGE
-
-        # ====================================================
-        # CHOICES
-        # ====================================================
-
-        choices = data.get(
-            "choices"
-        )
-
-        if not choices:
-
-            print(
-                "AI ERROR: choices missing"
-            )
-
-            print(
-                data
-            )
-
-            return AI_ERROR_MESSAGE
-
-        # ====================================================
-        # MESSAGE
-        # ====================================================
-
-        message = choices[0].get(
-            "message",
-            {}
-        )
-
-        reply = message.get(
-            "content",
-            ""
-        )
-
-        if reply is None:
-            reply = ""
-
-        reply = str(
-            reply
-        ).strip()
-
-        reply = clean_text(
-            reply
-        )
-
-        # ====================================================
-        # REMOVE PREFIX
-        # ====================================================
-
-        prefixes = [
-
-            "AI:",
-            "Answer:",
-            "Response:",
-            "Assistant:",
-            "Diana:"
-        ]
-
-        for prefix in prefixes:
-
-            if reply.lower().startswith(
-                prefix.lower()
-            ):
-
-                reply = reply[
-                    len(prefix):
-                ].strip()
-
-        # ====================================================
-        # EMPTY RESPONSE
-        # ====================================================
-
-        if not reply:
-
-            print(
-                "AI ERROR: Empty response"
-            )
-
-            return AI_ERROR_MESSAGE
-
-        print()
-        print("AI REPLY:")
-        print(reply)
-
-        print("========================================")
-
-        return reply
-
-    except requests.exceptions.Timeout:
-
-        print(
-            "AI TIMEOUT"
-        )
-
-        return AI_ERROR_MESSAGE
-
-    except requests.exceptions.ConnectionError as e:
-
-        print(
-            "AI CONNECTION ERROR:",
-            str(e)
-        )
-
-        return AI_ERROR_MESSAGE
-
-    except Exception as e:
-
-        print(
-            "AI ERROR:",
-            type(e).__name__,
-            str(e)
-        )
-
-        traceback.print_exc()
-
-        return AI_ERROR_MESSAGE
-
-
-# ============================================================
-# TTS
-# ============================================================
-
-def generate_tts(text):
-
-    text = clean_tts_text(
-        text
-    )
-
-    print()
-    print("========================================")
-    print("TTS REQUEST")
-    print("========================================")
-
-    print(
-        "TTS TEXT:",
-        text
-    )
-
-    print(
-        "TTS MODEL:",
-        TTS_MODEL
-    )
-
-    print(
-        "TTS VOICE:",
-        TTS_VOICE
-    )
-
-    if not text:
-
-        print(
-            "TTS ERROR: empty text"
-        )
-
-        return None
-
-    if not AI_API_KEY:
-
-        print(
-            "TTS ERROR: AI_API_KEY missing"
-        )
-
-        return None
-
-    # ========================================================
-    # TTS PAYLOAD
-    # ========================================================
-
-    payload = {
-
-        "model":
-            TTS_MODEL,
-
-        "input":
-            text,
-
-        "voice":
-            TTS_VOICE,
-
-        "response_format":
-            "wav"
-    }
-
-    headers = {
-
-        "Authorization":
-            "Bearer " + AI_API_KEY,
-
-        "Content-Type":
-            "application/json",
-
-        "Accept":
-            "audio/wav"
-    }
-
-    try:
-
-        print(
-            "SENDING TTS REQUEST..."
-        )
-
-        response = requests.post(
-
-            TTS_URL,
-
-            headers=headers,
-
-            json=payload,
-
-            timeout=60
-        )
-
-        print(
-            "TTS HTTP:",
-            response.status_code
-        )
-
-        print(
-            "TTS CONTENT TYPE:",
-            response.headers.get(
-                "Content-Type"
-            )
-        )
-
-        print(
-            "TTS CONTENT LENGTH:",
-            response.headers.get(
-                "Content-Length",
-                "-1"
-            )
-        )
-
-        # ====================================================
-        # SUCCESS
-        # ====================================================
-
-        if response.status_code == 200:
-
-            audio_data = response.content
-
-            if not audio_data:
-
-                print(
-                    "TTS ERROR: empty audio"
-                )
-
-                return None
-
-            print(
-                "TTS AUDIO BYTES:",
-                len(audio_data)
-            )
-
-            print(
-                "TTS SUCCESS"
-            )
-
-            print("========================================")
-
-            return audio_data
-
-        # ====================================================
-        # ERROR
-        # ====================================================
-
-        print()
-        print("========================================")
-        print("TTS SERVER ERROR")
-        print("========================================")
-
-        print(
-            "HTTP CODE:",
-            response.status_code
-        )
-
-        try:
-
-            print(
-                "ERROR BODY:",
-                response.text[:5000]
-            )
-
-        except Exception:
-
-            print(
-                "Could not read error body."
-            )
-
-        print("========================================")
-
-        return None
-
-    except requests.exceptions.Timeout:
-
-        print(
-            "TTS TIMEOUT"
-        )
-
-        return None
-
-    except requests.exceptions.ConnectionError as e:
-
-        print(
-            "TTS CONNECTION ERROR:",
-            str(e)
-        )
-
-        return None
-
-    except Exception as e:
-
-        print(
-            "TTS EXCEPTION:",
-            type(e).__name__,
-            str(e)
-        )
-
-        return None
-
-
-# ============================================================
-# TTS ENDPOINT
-# ============================================================
-
-@app.route(
-    "/tts",
-    methods=["POST"]
-)
-def tts():
-
-    print()
-    print("========================================")
-    print("TTS ENDPOINT")
-    print("========================================")
-
-    try:
-
-        data = request.get_json(
-            silent=True
-        )
-
-        if not data:
-
-            print(
-                "TTS: No JSON received"
-            )
-
-            return jsonify({
-
-                "status":
-                    "error",
-
-                "message":
-                    "No JSON received"
-
-            }), 400
-
-        print(
-            "TTS JSON:",
-            data
-        )
-
-        text = clean_text(
-            data.get("text")
-        )
-
-        if not text:
-
-            return jsonify({
-
-                "status":
-                    "error",
-
-                "message":
-                    "No text received"
-
-            }), 400
-
-        audio_data = generate_tts(
-            text
-        )
-
-        if audio_data is None:
-
-            return jsonify({
-
-                "status":
-                    "error",
-
-                "message":
-                    "TTS generation failed"
-
-            }), 500
-
-        return Response(
-
-            audio_data,
-
-            status=200,
-
-            mimetype="audio/wav",
-
-            headers={
-
-                "Cache-Control":
-                    "no-cache",
-
-                "Content-Disposition":
-                    "inline; filename=speech.wav"
-            }
-        )
-
-    except Exception as e:
-
-        print(
-            "TTS SERVER EXCEPTION:",
-            type(e).__name__,
-            str(e)
-        )
-
-        traceback.print_exc()
-
-        return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                str(e)
-
-        }), 500
-
-
-# ============================================================
-# UPLOAD AUDIO
+# AUDIO UPLOAD
 # ============================================================
 
 @app.route(
@@ -1308,6 +1824,13 @@ def upload_audio():
         print("========================================")
         print("AUDIO REQUEST RECEIVED")
         print("========================================")
+
+        session_id = get_session_id()
+
+        print(
+            "SESSION:",
+            session_id
+        )
 
         audio_data = request.get_data()
 
@@ -1326,12 +1849,6 @@ def upload_audio():
             len(audio_data)
         )
 
-        print("========================================")
-
-        # ====================================================
-        # NO AUDIO
-        # ====================================================
-
         if not audio_data:
 
             return jsonify({
@@ -1341,15 +1858,6 @@ def upload_audio():
 
                 "message":
                     "No audio received",
-
-                "transcription":
-                    None,
-
-                "hindi_transcription":
-                    None,
-
-                "english_transcription":
-                    None,
 
                 "ai_reply":
                     "Please ask your question again."
@@ -1364,9 +1872,7 @@ def upload_audio():
             suffix=".wav"
         )
 
-        os.close(
-            fd
-        )
+        os.close(fd)
 
         with open(
             filename,
@@ -1397,11 +1903,10 @@ def upload_audio():
             )
 
         hindi_text = None
-
         english_text = None
 
         # ====================================================
-        # HINDI RECOGNITION
+        # HINDI
         # ====================================================
 
         print()
@@ -1414,6 +1919,7 @@ def upload_audio():
                 audio,
 
                 language="hi-IN"
+
             )
 
             hindi_text = clean_text(
@@ -1434,7 +1940,7 @@ def upload_audio():
         except sr.RequestError as e:
 
             print(
-                "Google Speech error:",
+                "Google Speech ERROR:",
                 str(e)
             )
 
@@ -1452,7 +1958,7 @@ def upload_audio():
             }), 500
 
         # ====================================================
-        # ENGLISH RECOGNITION
+        # ENGLISH
         # ====================================================
 
         print()
@@ -1465,6 +1971,7 @@ def upload_audio():
                 audio,
 
                 language="en-IN"
+
             )
 
             english_text = clean_text(
@@ -1485,7 +1992,7 @@ def upload_audio():
         except sr.RequestError as e:
 
             print(
-                "Google Speech error:",
+                "Google Speech ERROR:",
                 str(e)
             )
 
@@ -1545,6 +2052,23 @@ def upload_audio():
             }), 400
 
         # ====================================================
+        # LANGUAGE
+        # ====================================================
+
+        detected_language = detect_user_language(
+
+            hindi_text,
+
+            english_text
+
+        )
+
+        print(
+            "FINAL LANGUAGE:",
+            detected_language
+        )
+
+        # ====================================================
         # AI
         # ====================================================
 
@@ -1552,35 +2076,58 @@ def upload_audio():
 
             hindi_text,
 
-            english_text
+            english_text,
+
+            session_id
+
         )
 
         # ====================================================
-        # BEST TRANSCRIPTION
+        # TRANSCRIPTION
         # ====================================================
 
-        if is_valid_query(
-            english_text
-        ):
+        if detected_language == "english":
 
             transcription = (
+
                 english_text
+
+                if is_valid_query(
+                    english_text
+                )
+
+                else hindi_text
+
             )
 
         else:
 
             transcription = (
+
                 hindi_text
+
+                if is_valid_query(
+                    hindi_text
+                )
+
+                else english_text
+
             )
 
         # ====================================================
-        # FINAL RESPONSE
+        # RESPONSE
         # ====================================================
 
         response_data = {
 
             "status":
                 "ok",
+
+            "session_id":
+                session_id,
+
+            "language":
+                detected_language,
 
             "transcription":
                 transcription,
@@ -1593,6 +2140,7 @@ def upload_audio():
 
             "ai_reply":
                 ai_reply
+
         }
 
         print()
@@ -1663,67 +2211,11 @@ def upload_audio():
                     )
 
             except Exception:
-
                 pass
 
 
 # ============================================================
-# DIRECT TTS TEST
-# ============================================================
-
-@app.route(
-    "/test-tts",
-    methods=["GET"]
-)
-def test_tts():
-
-    print()
-    print("========================================")
-    print("DIRECT TTS TEST")
-    print("========================================")
-
-    test_text = (
-        "Hello, I am Diana. "
-        "How can I help you with STEM, robotics, AI or electronics?"
-    )
-
-    audio_data = generate_tts(
-        test_text
-    )
-
-    if audio_data is None:
-
-        return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                "TTS test failed"
-
-        }), 500
-
-    return Response(
-
-        audio_data,
-
-        status=200,
-
-        mimetype="audio/wav",
-
-        headers={
-
-            "Cache-Control":
-                "no-cache",
-
-            "Content-Disposition":
-                "inline; filename=diana-test.wav"
-        }
-    )
-
-
-# ============================================================
-# START
+# START SERVER
 # ============================================================
 
 if __name__ == "__main__":
@@ -1737,12 +2229,17 @@ if __name__ == "__main__":
 
     print()
     print("========================================")
-    print("ESP32 VOICE SERVER")
+    print("HANNAH ESP32 VOICE SERVER")
     print("========================================")
 
     print(
         "PORT:",
         port
+    )
+
+    print(
+        "ASSISTANT:",
+        "Hannah"
     )
 
     print(
@@ -1761,34 +2258,26 @@ if __name__ == "__main__":
     )
 
     print(
+        "TTS MAX CHARS:",
+        TTS_MAX_CHARS
+    )
+
+    print(
+        "MEMORY:",
+        "ENABLED"
+    )
+
+    print(
         "AI KEY:",
         "CONFIGURED"
         if AI_API_KEY
         else "MISSING"
     )
 
-    print(
-        "ASSISTANT:",
-        "Diana"
-    )
-
-    print(
-        "COMPANY:",
-        "Avitron Aerospace Pvt. Ltd."
-    )
-
-    print(
-        "DOMAIN:",
-        "STEM | AI | Robotics | Electronics | Aerospace"
-    )
-
     print("========================================")
 
     app.run(
-
         host="0.0.0.0",
-
         port=port,
-
         threaded=True
     )
