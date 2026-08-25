@@ -28,7 +28,7 @@ AI_MODEL = os.environ.get(
 
 
 # ============================================================
-# GROQ TTS CONFIG
+# GROQ TTS
 # ============================================================
 
 TTS_URL = os.environ.get(
@@ -41,18 +41,16 @@ TTS_MODEL = os.environ.get(
     "canopylabs/orpheus-v1-english"
 )
 
-# Female voice
 TTS_VOICE = os.environ.get(
     "TTS_VOICE",
     "hannah"
 )
 
-# Orpheus input maximum
 TTS_MAX_CHARS = 200
 
 
 # ============================================================
-# HOME
+# APP
 # ============================================================
 
 @app.route("/", methods=["GET"])
@@ -70,35 +68,52 @@ def health():
 
     return jsonify({
         "status": "online",
-
-        "speech_engine":
-            "Google Speech Recognition",
-
-        "ai_engine":
-            "Groq",
-
-        "model":
-            AI_MODEL,
-
-        "tts_engine":
-            "Groq Orpheus",
-
-        "tts_model":
-            TTS_MODEL,
-
-        "tts_voice":
-            TTS_VOICE
+        "speech_engine": "Google Speech Recognition",
+        "ai_engine": "Groq",
+        "model": AI_MODEL,
+        "tts_engine": "Groq Orpheus",
+        "tts_model": TTS_MODEL,
+        "tts_voice": TTS_VOICE
     })
+
+
+# ============================================================
+# BASIC TEST
+# ============================================================
+
+@app.route("/test", methods=["POST"])
+def test():
+
+    try:
+
+        data = request.get_json(silent=True)
+
+        if not data:
+
+            return jsonify({
+                "status": "error",
+                "message": "No JSON received"
+            }), 400
+
+        return jsonify({
+            "status": "ok",
+            "message": "Data received",
+            "data": data
+        })
+
+    except Exception as e:
+
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 
 # ============================================================
 # WAKE
 # ============================================================
 
-@app.route(
-    "/wake",
-    methods=["POST", "GET"]
-)
+@app.route("/wake", methods=["POST", "GET"])
 def wake():
 
     print()
@@ -138,42 +153,7 @@ def wake():
             str(e)
         )
 
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
-
-# ============================================================
-# TEST
-# ============================================================
-
-@app.route(
-    "/test",
-    methods=["POST"]
-)
-def test():
-
-    try:
-
-        data = request.get_json(
-            silent=True
-        )
-
-        if not data:
-
-            return jsonify({
-                "status": "error",
-                "message": "No JSON received"
-            }), 400
-
-        return jsonify({
-            "status": "ok",
-            "message": "Data received",
-            "data": data
-        })
-
-    except Exception as e:
+        traceback.print_exc()
 
         return jsonify({
             "status": "error",
@@ -194,17 +174,14 @@ def clean_text(text):
 
     text = text.strip()
 
-    # Remove markdown code blocks
     text = text.replace("```", "")
 
-    # Remove newlines
     text = re.sub(
         r"[\r\n]+",
         " ",
         text
     )
 
-    # Multiple spaces
     text = re.sub(
         r"\s+",
         " ",
@@ -215,7 +192,41 @@ def clean_text(text):
 
 
 # ============================================================
-# TTS TEXT CLEANING
+# DETECT DEVANAGARI
+# ============================================================
+
+def contains_devanagari(text):
+
+    if not text:
+        return False
+
+    return bool(
+        re.search(
+            r"[\u0900-\u097F]",
+            str(text)
+        )
+    )
+
+
+# ============================================================
+# HAS LETTER / DIGIT
+# ============================================================
+
+def has_letter_or_digit(text):
+
+    if not text:
+        return False
+
+    return bool(
+        re.search(
+            r"[A-Za-z0-9]",
+            str(text)
+        )
+    )
+
+
+# ============================================================
+# SAFE ENGLISH TTS TEXT
 # ============================================================
 
 def clean_tts_text(text):
@@ -225,12 +236,16 @@ def clean_tts_text(text):
     if not text:
         return ""
 
-    # Remove common AI prefixes
+    # --------------------------------------------------------
+    # Prefixes
+    # --------------------------------------------------------
+
     prefixes = [
         "AI:",
         "Answer:",
         "Response:",
-        "Assistant:"
+        "Assistant:",
+        "Diana:"
     ]
 
     for prefix in prefixes:
@@ -243,7 +258,10 @@ def clean_tts_text(text):
                 len(prefix):
             ].strip()
 
-    # Remove markdown
+    # --------------------------------------------------------
+    # Markdown
+    # --------------------------------------------------------
+
     text = text.replace(
         "**",
         ""
@@ -259,7 +277,27 @@ def clean_tts_text(text):
         ""
     )
 
-    # Remove emojis / unusual symbols
+    # --------------------------------------------------------
+    # IMPORTANT:
+    #
+    # DO NOT silently delete Hindi.
+    #
+    # If Devanagari is still present here,
+    # caller must convert it first.
+    # --------------------------------------------------------
+
+    if contains_devanagari(text):
+
+        print(
+            "TTS CLEAN: DEVANAGARI DETECTED"
+        )
+
+        return ""
+
+    # --------------------------------------------------------
+    # Keep only ASCII
+    # --------------------------------------------------------
+
     text = re.sub(
         r"[^\x00-\x7F]+",
         " ",
@@ -274,14 +312,28 @@ def clean_tts_text(text):
 
     text = text.strip()
 
-    # Groq Orpheus max 200 chars
+    # --------------------------------------------------------
+    # Remove punctuation-only text
+    # --------------------------------------------------------
+
+    if not has_letter_or_digit(text):
+
+        print(
+            "TTS CLEAN: NO LETTER/DIGIT"
+        )
+
+        return ""
+
+    # --------------------------------------------------------
+    # Maximum 200 characters
+    # --------------------------------------------------------
+
     if len(text) > TTS_MAX_CHARS:
 
         text = text[
             :TTS_MAX_CHARS
         ]
 
-        # Try to end at punctuation
         positions = [
             text.rfind("."),
             text.rfind("?"),
@@ -330,25 +382,15 @@ def is_valid_query(text):
 
 
 # ============================================================
-# AI
+# AI REQUEST
 # ============================================================
 
-def get_ai_reply(
-    hindi_text,
-    english_text
+def call_ai_chat(
+    system_prompt,
+    user_content,
+    temperature=0.2,
+    max_tokens=200
 ):
-
-    hindi_text = clean_text(
-        hindi_text
-    )
-
-    english_text = clean_text(
-        english_text
-    )
-
-    # ========================================================
-    # AI KEY MISSING
-    # ========================================================
 
     if not AI_API_KEY:
 
@@ -356,110 +398,7 @@ def get_ai_reply(
             "AI ERROR: AI_API_KEY missing"
         )
 
-        return (
-            "No AI response. Try again."
-        )
-
-    # ========================================================
-    # INVALID QUERY
-    # ========================================================
-
-    if (
-        not is_valid_query(hindi_text)
-        and
-        not is_valid_query(english_text)
-    ):
-
-        return (
-            "Please ask your question again."
-        )
-
-    # ========================================================
-    # AI SYSTEM PROMPT
-    # ========================================================
-
-    system_prompt = """
-You are Diana, a concise bilingual voice assistant running
-on an ESP32.
-
-The user speech may be:
-- English
-- Hindi
-- Hinglish
-- Roman Hindi
-
-Understand the intended meaning from both recognition results.
-
-LANGUAGE RULES:
-
-If the user speaks English:
-answer in natural English.
-
-If the user speaks Hindi:
-answer in natural Roman Hindi / Hinglish.
-
-If the user speaks Hinglish:
-answer in natural Hinglish.
-
-IMPORTANT:
-Never answer using Devanagari Hindi script.
-
-Hindi answers MUST be written using English/Roman letters.
-
-Examples:
-
-User:
-Aap kaise ho?
-
-Good:
-Main bilkul theek hoon. Aap kaise hain?
-
-User:
-Mujhe time batao.
-
-Good:
-Bilkul, main aapko time bata deta hoon.
-
-User:
-What is the capital of India?
-
-Good:
-The capital of India is New Delhi.
-
-VOICE RULES:
-
-Keep the answer very short.
-
-Usually one or two sentences.
-
-Maximum about 150 characters when possible.
-
-No markdown.
-
-No bullet points.
-
-No emojis.
-
-No headings.
-
-Do not repeat the question.
-
-Do not say "As an AI".
-
-Sound natural and conversational.
-
-Return ONLY the answer.
-"""
-
-    user_content = f"""
-Hindi speech recognition:
-{hindi_text if hindi_text else "No result"}
-
-English speech recognition:
-{english_text if english_text else "No result"}
-
-Determine the intended meaning and answer naturally.
-"""
+        return ""
 
     payload = {
 
@@ -480,10 +419,10 @@ Determine the intended meaning and answer naturally.
         ],
 
         "temperature":
-            0.2,
+            temperature,
 
         "max_completion_tokens":
-            200,
+            max_tokens,
 
         "stream":
             False
@@ -503,11 +442,6 @@ Determine the intended meaning and answer naturally.
 
     try:
 
-        print()
-        print("========================================")
-        print("AI REQUEST")
-        print("========================================")
-
         response = requests.post(
 
             AI_URL,
@@ -524,10 +458,6 @@ Determine the intended meaning and answer naturally.
             response.status_code
         )
 
-        # ====================================================
-        # AI SERVER ERROR
-        # ====================================================
-
         if response.status_code != 200:
 
             print(
@@ -538,13 +468,7 @@ Determine the intended meaning and answer naturally.
                 response.text[:3000]
             )
 
-            return (
-                "No AI response. Try again."
-            )
-
-        # ====================================================
-        # JSON ERROR
-        # ====================================================
+            return ""
 
         try:
 
@@ -557,13 +481,7 @@ Determine the intended meaning and answer naturally.
                 str(e)
             )
 
-            return (
-                "No AI response. Try again."
-            )
-
-        # ====================================================
-        # CHOICES CHECK
-        # ====================================================
+            return ""
 
         choices = data.get(
             "choices"
@@ -575,17 +493,9 @@ Determine the intended meaning and answer naturally.
                 "AI ERROR: choices missing"
             )
 
-            print(
-                data
-            )
+            print(data)
 
-            return (
-                "No AI response. Try again."
-            )
-
-        # ====================================================
-        # MESSAGE
-        # ====================================================
+            return ""
 
         message = choices[0].get(
             "message",
@@ -600,23 +510,14 @@ Determine the intended meaning and answer naturally.
         if reply is None:
             reply = ""
 
-        reply = str(
-            reply
-        ).strip()
-
-        reply = clean_text(
-            reply
-        )
-
-        # ====================================================
-        # REMOVE PREFIX
-        # ====================================================
+        reply = clean_text(reply)
 
         prefixes = [
             "AI:",
             "Answer:",
             "Response:",
-            "Assistant:"
+            "Assistant:",
+            "Diana:"
         ]
 
         for prefix in prefixes:
@@ -629,27 +530,7 @@ Determine the intended meaning and answer naturally.
                     len(prefix):
                 ].strip()
 
-        # ====================================================
-        # EMPTY REPLY
-        # ====================================================
-
-        if not reply:
-
-            return (
-                "No AI response. Try again."
-            )
-
-        print()
-        print("AI REPLY:")
-        print(reply)
-
-        print("========================================")
-
         return reply
-
-    # ========================================================
-    # TIMEOUT
-    # ========================================================
 
     except requests.exceptions.Timeout:
 
@@ -657,56 +538,461 @@ Determine the intended meaning and answer naturally.
             "AI TIMEOUT"
         )
 
-        return (
-            "No AI response. Try again."
-        )
+        return ""
 
-    # ========================================================
-    # CONNECTION ERROR
-    # ========================================================
-
-    except requests.exceptions.ConnectionError:
+    except requests.exceptions.ConnectionError as e:
 
         print(
-            "AI CONNECTION ERROR"
+            "AI CONNECTION ERROR:",
+            str(e)
         )
 
-        return (
-            "No AI response. Try again."
-        )
-
-    # ========================================================
-    # OTHER ERROR
-    # ========================================================
+        return ""
 
     except Exception as e:
 
         print(
-            "AI ERROR:",
+            "AI EXCEPTION:",
             type(e).__name__,
             str(e)
         )
+
+        traceback.print_exc()
+
+        return ""
+
+
+# ============================================================
+# GET AI REPLY
+# ============================================================
+
+def get_ai_reply(
+    hindi_text,
+    english_text
+):
+
+    hindi_text = clean_text(
+        hindi_text
+    )
+
+    english_text = clean_text(
+        english_text
+    )
+
+    if not AI_API_KEY:
+
+        print(
+            "AI ERROR: AI_API_KEY missing"
+        )
+
+        return "No AI response. Try again."
+
+    if (
+        not is_valid_query(hindi_text)
+        and
+        not is_valid_query(english_text)
+    ):
+
+        return (
+            "Please ask your question again."
+        )
+
+    system_prompt = """
+You are Diana, a concise bilingual voice assistant running
+on an ESP32.
+
+The user's speech may be:
+English, Hindi, Hinglish, or Roman Hindi.
+
+Understand the intended meaning from the recognition results.
+
+STRICT LANGUAGE RULE:
+
+NEVER use Devanagari Hindi script.
+
+If the user speaks Hindi:
+reply ONLY in Roman Hindi using English letters.
+
+If the user speaks Hinglish:
+reply in natural Hinglish.
+
+If the user speaks English:
+reply in natural English.
+
+Examples:
+
+User: Aap kaise ho?
+Answer: Main bilkul theek hoon. Aap kaise hain?
+
+User: Mujhe time batao.
+Answer: Bilkul, main aapko time bata deta hoon.
+
+User: What is the capital of India?
+Answer: The capital of India is New Delhi.
+
+VOICE RULES:
+
+Keep answers short.
+
+Usually one or two sentences.
+
+Maximum about 150 characters when possible.
+
+No markdown.
+
+No bullet points.
+
+No emojis.
+
+No headings.
+
+Do not repeat the question.
+
+Do not say "As an AI".
+
+Sound natural and conversational.
+
+IMPORTANT:
+The answer will be sent directly to an English TTS engine.
+Therefore NEVER output Hindi characters such as:
+अ आ इ ई उ ए ओ क ख ग
+or any Devanagari script.
+
+Return ONLY the answer.
+"""
+
+    user_content = f"""
+Hindi speech recognition:
+{hindi_text if hindi_text else "No result"}
+
+English speech recognition:
+{english_text if english_text else "No result"}
+
+Determine the intended meaning and answer naturally.
+"""
+
+    print()
+    print("========================================")
+    print("AI REQUEST")
+    print("========================================")
+
+    print(
+        "HINDI INPUT:",
+        hindi_text
+    )
+
+    print(
+        "ENGLISH INPUT:",
+        english_text
+    )
+
+    reply = call_ai_chat(
+        system_prompt,
+        user_content,
+        temperature=0.15,
+        max_tokens=200
+    )
+
+    if not reply:
 
         return (
             "No AI response. Try again."
         )
 
+    print()
+    print("AI REPLY:")
+    print(reply)
+
+    # --------------------------------------------------------
+    # SAFETY CHECK
+    # --------------------------------------------------------
+
+    if contains_devanagari(reply):
+
+        print()
+        print(
+            "WARNING: AI RETURNED DEVANAGARI"
+        )
+
+        print(
+            "Starting ROMANIZATION FALLBACK..."
+        )
+
+        romanized = romanize_hindi(
+            reply
+        )
+
+        if romanized:
+
+            reply = romanized
+
+            print(
+                "ROMANIZED AI REPLY:"
+            )
+
+            print(reply)
+
+        else:
+
+            print(
+                "ROMANIZATION FAILED"
+            )
+
+            # Safe fallback so TTS doesn't receive Hindi
+            reply = (
+                "Okay, I understand."
+            )
+
+    print("========================================")
+
+    return reply
+
 
 # ============================================================
-# TTS
+# ROMANIZE HINDI
 # ============================================================
 
-def generate_tts(text):
+def romanize_hindi(text):
 
-    # Clean for TTS
+    text = clean_text(text)
+
+    if not text:
+        return ""
+
+    print()
+    print("========================================")
+    print("HINDI ROMANIZATION")
+    print("========================================")
+
+    print(
+        "ORIGINAL:",
+        text
+    )
+
+    system_prompt = """
+You convert Hindi written in Devanagari into natural Roman Hindi.
+
+Rules:
+
+1. Convert Hindi Devanagari to English/Roman letters.
+2. Preserve the exact meaning.
+3. Do NOT translate the meaning into unrelated English.
+4. Make it easy for an English TTS voice to pronounce.
+5. Do not use Devanagari.
+6. Do not add explanations.
+7. Return ONLY the Roman Hindi sentence.
+
+Examples:
+
+ठीक है.
+Theek hai.
+
+मैं आपकी मदद कर सकता हूँ.
+Main aapki madad kar sakta hoon.
+
+आप कैसे हैं?
+Aap kaise hain?
+
+बहुत अच्छा.
+Bahut achha.
+"""
+
+    user_content = f"""
+Convert this text to natural Roman Hindi:
+
+{text}
+"""
+
+    result = call_ai_chat(
+        system_prompt,
+        user_content,
+        temperature=0.0,
+        max_tokens=120
+    )
+
+    result = clean_text(
+        result
+    )
+
+    if not result:
+
+        print(
+            "ROMANIZATION: EMPTY"
+        )
+
+        return ""
+
+    if contains_devanagari(result):
+
+        print(
+            "ROMANIZATION FAILED: STILL DEVANAGARI"
+        )
+
+        print(
+            "RESULT:",
+            result
+        )
+
+        return ""
+
+    if not has_letter_or_digit(result):
+
+        print(
+            "ROMANIZATION FAILED: NO LETTER/DIGIT"
+        )
+
+        return ""
+
+    print(
+        "ROMANIZED:",
+        result
+    )
+
+    print("========================================")
+
+    return result
+
+
+# ============================================================
+# PREPARE TTS TEXT
+# ============================================================
+
+def prepare_tts_text(text):
+
+    text = clean_text(text)
+
+    print()
+    print("========================================")
+    print("PREPARE TTS TEXT")
+    print("========================================")
+
+    print(
+        "INPUT:",
+        text
+    )
+
+    if not text:
+
+        print(
+            "TTS PREPARE: EMPTY"
+        )
+
+        return ""
+
+    # --------------------------------------------------------
+    # Hindi detected
+    # --------------------------------------------------------
+
+    if contains_devanagari(text):
+
+        print(
+            "TTS PREPARE: HINDI DETECTED"
+        )
+
+        text = romanize_hindi(
+            text
+        )
+
+        if not text:
+
+            print(
+                "TTS PREPARE: ROMANIZATION FAILED"
+            )
+
+            return ""
+
+    # --------------------------------------------------------
+    # Clean
+    # --------------------------------------------------------
+
     text = clean_tts_text(
         text
     )
+
+    if not text:
+
+        print(
+            "TTS PREPARE: INVALID AFTER CLEAN"
+        )
+
+        return ""
+
+    if contains_devanagari(text):
+
+        print(
+            "TTS PREPARE: DEVANAGARI STILL PRESENT"
+        )
+
+        return ""
+
+    if not has_letter_or_digit(text):
+
+        print(
+            "TTS PREPARE: NO LETTER OR DIGIT"
+        )
+
+        return ""
+
+    # --------------------------------------------------------
+    # 200 character limit
+    # --------------------------------------------------------
+
+    if len(text) > TTS_MAX_CHARS:
+
+        text = text[
+            :TTS_MAX_CHARS
+        ]
+
+    print(
+        "FINAL TTS TEXT:",
+        text
+    )
+
+    print(
+        "TTS CHARACTERS:",
+        len(text)
+    )
+
+    print("========================================")
+
+    return text
+
+
+# ============================================================
+# GENERATE TTS
+# ============================================================
+
+def generate_tts(text):
 
     print()
     print("========================================")
     print("TTS REQUEST")
     print("========================================")
+
+    original_text = clean_text(
+        text
+    )
+
+    print(
+        "ORIGINAL TTS TEXT:",
+        original_text
+    )
+
+    # --------------------------------------------------------
+    # Prepare text
+    # --------------------------------------------------------
+
+    text = prepare_tts_text(
+        original_text
+    )
+
+    if not text:
+
+        print(
+            "TTS ERROR: Could not prepare text"
+        )
+
+        return None
 
     print(
         "TTS TEXT:",
@@ -723,13 +1009,9 @@ def generate_tts(text):
         TTS_VOICE
     )
 
-    if not text:
-
-        print(
-            "TTS ERROR: empty text"
-        )
-
-        return None
+    # --------------------------------------------------------
+    # API key
+    # --------------------------------------------------------
 
     if not AI_API_KEY:
 
@@ -739,9 +1021,29 @@ def generate_tts(text):
 
         return None
 
-    # ========================================================
-    # GROQ ORPHEUS PAYLOAD
-    # ========================================================
+    # --------------------------------------------------------
+    # Final safety
+    # --------------------------------------------------------
+
+    if contains_devanagari(text):
+
+        print(
+            "TTS BLOCKED: DEVANAGARI"
+        )
+
+        return None
+
+    if not has_letter_or_digit(text):
+
+        print(
+            "TTS BLOCKED: NO LETTER/DIGIT"
+        )
+
+        return None
+
+    # --------------------------------------------------------
+    # Payload
+    # --------------------------------------------------------
 
     payload = {
 
@@ -770,11 +1072,20 @@ def generate_tts(text):
             "audio/wav"
     }
 
-    try:
+    print()
+    print(
+        "TTS PAYLOAD:"
+    )
 
-        print(
-            "SENDING TTS REQUEST..."
-        )
+    print(
+        payload
+    )
+
+    print(
+        "SENDING TTS REQUEST..."
+    )
+
+    try:
 
         response = requests.post(
 
@@ -787,6 +1098,7 @@ def generate_tts(text):
             timeout=60
         )
 
+        print()
         print(
             "TTS HTTP:",
             response.status_code
@@ -807,26 +1119,44 @@ def generate_tts(text):
             )
         )
 
-        # ====================================================
+        # ----------------------------------------------------
         # SUCCESS
-        # ====================================================
+        # ----------------------------------------------------
 
         if response.status_code == 200:
 
             audio_data = response.content
 
-            if not audio_data:
-
-                print(
-                    "TTS ERROR: empty audio"
-                )
-
-                return None
-
             print(
                 "TTS AUDIO BYTES:",
                 len(audio_data)
             )
+
+            if not audio_data:
+
+                print(
+                    "TTS ERROR: EMPTY AUDIO"
+                )
+
+                return None
+
+            # WAV validation
+            if len(audio_data) >= 12:
+
+                print(
+                    "TTS HEADER:",
+                    audio_data[:12]
+                )
+
+                if (
+                    audio_data[0:4] != b"RIFF"
+                    or
+                    audio_data[8:12] != b"WAVE"
+                ):
+
+                    print(
+                        "WARNING: RESPONSE IS NOT NORMAL WAV"
+                    )
 
             print(
                 "TTS SUCCESS"
@@ -836,9 +1166,9 @@ def generate_tts(text):
 
             return audio_data
 
-        # ====================================================
+        # ----------------------------------------------------
         # ERROR
-        # ====================================================
+        # ----------------------------------------------------
 
         print()
         print("========================================")
@@ -849,6 +1179,18 @@ def generate_tts(text):
             "HTTP CODE:",
             response.status_code
         )
+
+        print(
+            "RESPONSE HEADERS:"
+        )
+
+        for key, value in response.headers.items():
+
+            print(
+                key,
+                ":",
+                value
+            )
 
         try:
 
@@ -892,6 +1234,8 @@ def generate_tts(text):
             str(e)
         )
 
+        traceback.print_exc()
+
         return None
 
 
@@ -899,10 +1243,7 @@ def generate_tts(text):
 # TTS ENDPOINT
 # ============================================================
 
-@app.route(
-    "/tts",
-    methods=["POST"]
-)
+@app.route("/tts", methods=["POST"])
 def tts():
 
     print()
@@ -919,17 +1260,12 @@ def tts():
         if not data:
 
             print(
-                "TTS: No JSON received"
+                "TTS: NO JSON RECEIVED"
             )
 
             return jsonify({
-
-                "status":
-                    "error",
-
-                "message":
-                    "No JSON received"
-
+                "status": "error",
+                "message": "No JSON received"
             }), 400
 
         print(
@@ -944,13 +1280,8 @@ def tts():
         if not text:
 
             return jsonify({
-
-                "status":
-                    "error",
-
-                "message":
-                    "No text received"
-
+                "status": "error",
+                "message": "No text received"
             }), 400
 
         audio_data = generate_tts(
@@ -960,14 +1291,14 @@ def tts():
         if audio_data is None:
 
             return jsonify({
-
-                "status":
-                    "error",
-
-                "message":
-                    "TTS generation failed"
-
+                "status": "error",
+                "message": "TTS generation failed"
             }), 500
+
+        # ----------------------------------------------------
+        # IMPORTANT:
+        # Explicit Content-Length
+        # ----------------------------------------------------
 
         return Response(
 
@@ -979,8 +1310,17 @@ def tts():
 
             headers={
 
+                "Content-Type":
+                    "audio/wav",
+
+                "Content-Length":
+                    str(len(audio_data)),
+
                 "Cache-Control":
                     "no-cache",
+
+                "Connection":
+                    "close",
 
                 "Content-Disposition":
                     "inline; filename=speech.wav"
@@ -1009,13 +1349,134 @@ def tts():
 
 
 # ============================================================
+# DIRECT TTS TEST - ENGLISH
+# ============================================================
+
+@app.route("/test-tts", methods=["GET"])
+def test_tts():
+
+    print()
+    print("========================================")
+    print("DIRECT TTS TEST")
+    print("========================================")
+
+    test_text = (
+        "Hello, I am Diana. "
+        "How can I help you?"
+    )
+
+    audio_data = generate_tts(
+        test_text
+    )
+
+    if audio_data is None:
+
+        return jsonify({
+
+            "status":
+                "error",
+
+            "message":
+                "TTS test failed"
+
+        }), 500
+
+    return Response(
+
+        audio_data,
+
+        status=200,
+
+        mimetype="audio/wav",
+
+        headers={
+
+            "Content-Type":
+                "audio/wav",
+
+            "Content-Length":
+                str(len(audio_data)),
+
+            "Cache-Control":
+                "no-cache",
+
+            "Connection":
+                "close",
+
+            "Content-Disposition":
+                "inline; filename=diana-test.wav"
+        }
+    )
+
+
+# ============================================================
+# DIRECT HINDI TTS TEST
+# ============================================================
+
+@app.route("/test-hindi-tts", methods=["GET"])
+def test_hindi_tts():
+
+    print()
+    print("========================================")
+    print("HINDI TTS TEST")
+    print("========================================")
+
+    test_text = "ठीक है, मैं आपकी मदद कर सकती हूँ."
+
+    print(
+        "TEST HINDI:",
+        test_text
+    )
+
+    audio_data = generate_tts(
+        test_text
+    )
+
+    if audio_data is None:
+
+        return jsonify({
+
+            "status":
+                "error",
+
+            "message":
+                "Hindi TTS test failed"
+
+        }), 500
+
+    return Response(
+
+        audio_data,
+
+        status=200,
+
+        mimetype="audio/wav",
+
+        headers={
+
+            "Content-Type":
+                "audio/wav",
+
+            "Content-Length":
+                str(len(audio_data)),
+
+            "Cache-Control":
+                "no-cache",
+
+            "Connection":
+                "close",
+
+            "Content-Disposition":
+                "inline; filename=hindi-test.wav"
+        }
+    )
+
+
+# ============================================================
 # UPLOAD AUDIO
 # ============================================================
 
-@app.route(
-    "/uploadAudio",
-    methods=["POST"]
-)
+@app.route("/uploadAudio", methods=["POST"])
 def upload_audio():
 
     filename = None
@@ -1046,10 +1507,6 @@ def upload_audio():
 
         print("========================================")
 
-        # ====================================================
-        # NO AUDIO
-        # ====================================================
-
         if not audio_data:
 
             return jsonify({
@@ -1074,9 +1531,9 @@ def upload_audio():
 
             }), 400
 
-        # ====================================================
+        # ----------------------------------------------------
         # SAVE WAV
-        # ====================================================
+        # ----------------------------------------------------
 
         fd, filename = tempfile.mkstemp(
             suffix=".wav"
@@ -1098,9 +1555,9 @@ def upload_audio():
             filename
         )
 
-        # ====================================================
+        # ----------------------------------------------------
         # SPEECH RECOGNITION
-        # ====================================================
+        # ----------------------------------------------------
 
         recognizer = sr.Recognizer()
 
@@ -1115,9 +1572,9 @@ def upload_audio():
         hindi_text = None
         english_text = None
 
-        # ====================================================
-        # HINDI RECOGNITION
-        # ====================================================
+        # ----------------------------------------------------
+        # HINDI
+        # ----------------------------------------------------
 
         print()
         print("HINDI SPEECH")
@@ -1166,9 +1623,9 @@ def upload_audio():
 
             }), 500
 
-        # ====================================================
-        # ENGLISH RECOGNITION
-        # ====================================================
+        # ----------------------------------------------------
+        # ENGLISH
+        # ----------------------------------------------------
 
         print()
         print("ENGLISH SPEECH")
@@ -1223,9 +1680,9 @@ def upload_audio():
 
             }), 500
 
-        # ====================================================
+        # ----------------------------------------------------
         # VALIDATION
-        # ====================================================
+        # ----------------------------------------------------
 
         if (
             not is_valid_query(hindi_text)
@@ -1259,9 +1716,9 @@ def upload_audio():
 
             }), 400
 
-        # ====================================================
+        # ----------------------------------------------------
         # AI
-        # ====================================================
+        # ----------------------------------------------------
 
         ai_reply = get_ai_reply(
 
@@ -1270,9 +1727,9 @@ def upload_audio():
             english_text
         )
 
-        # ====================================================
+        # ----------------------------------------------------
         # BEST TRANSCRIPTION
-        # ====================================================
+        # ----------------------------------------------------
 
         if is_valid_query(
             english_text
@@ -1288,9 +1745,9 @@ def upload_audio():
                 hindi_text
             )
 
-        # ====================================================
-        # FINAL RESPONSE
-        # ====================================================
+        # ----------------------------------------------------
+        # FINAL
+        # ----------------------------------------------------
 
         response_data = {
 
@@ -1380,61 +1837,6 @@ def upload_audio():
             except Exception:
 
                 pass
-
-
-# ============================================================
-# DIRECT TTS TEST
-# ============================================================
-
-@app.route(
-    "/test-tts",
-    methods=["GET"]
-)
-def test_tts():
-
-    print()
-    print("========================================")
-    print("DIRECT TTS TEST")
-    print("========================================")
-
-    test_text = (
-        "Hello, I am Diana. "
-        "How can I help you?"
-    )
-
-    audio_data = generate_tts(
-        test_text
-    )
-
-    if audio_data is None:
-
-        return jsonify({
-
-            "status":
-                "error",
-
-            "message":
-                "TTS test failed"
-
-        }), 500
-
-    return Response(
-
-        audio_data,
-
-        status=200,
-
-        mimetype="audio/wav",
-
-        headers={
-
-            "Cache-Control":
-                "no-cache",
-
-            "Content-Disposition":
-                "inline; filename=diana-test.wav"
-        }
-    )
 
 
 # ============================================================
