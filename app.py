@@ -45,7 +45,7 @@ TTS_VOICE = os.environ.get(
     "hannah"
 )
 
-TTS_MAX_CHARS = 200
+TTS_MAX_CHARS = 1000
 
 # ============================================================
 # MEMORY
