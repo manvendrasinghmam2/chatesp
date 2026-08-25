@@ -353,7 +353,7 @@ def get_ai_reply(
         )
 
         return (
-            "AI response nahi mil saka."
+            "No AI response. Try again."
         )
 
     if (
@@ -611,7 +611,7 @@ Determine the intended meaning and answer naturally.
         if not reply:
 
             return (
-                "AI response nahi mil saka."
+                "No AI response. Try again."
             )
 
         print()
@@ -629,7 +629,7 @@ Determine the intended meaning and answer naturally.
         )
 
         return (
-            "AI response nahi mil saka."
+            "No AI response. Try again."
         )
 
     except requests.exceptions.ConnectionError:
@@ -639,7 +639,7 @@ Determine the intended meaning and answer naturally.
         )
 
         return (
-            "AI response nahi mil saka."
+            "No AI response. Try again."
         )
 
     except Exception as e:
@@ -651,7 +651,7 @@ Determine the intended meaning and answer naturally.
         )
 
         return (
-            "AI response nahi mil saka."
+            "No AI response. Try again."
         )
 
 
@@ -1320,7 +1320,7 @@ def upload_audio():
                 None,
 
             "ai_reply":
-                "AI response nahi mil saka."
+                "No AI response. Try again."
 
         }), 500
 
