@@ -41,7 +41,6 @@ TTS_MODEL = os.environ.get(
     "canopylabs/orpheus-v1-english"
 )
 
-
 # ============================================================
 # HANNAH VOICE
 # ============================================================
@@ -51,28 +50,14 @@ TTS_VOICE = os.environ.get(
     "hannah"
 )
 
-
-# ============================================================
-# IMPORTANT
-# ============================================================
-# Earlier this was 200.
-#
-# Now increased so complete answers can be spoken.
-#
-# This is a SERVER-SIDE limit.
-# Actual TTS model/API limits can still apply.
-# ============================================================
-
-TTS_MAX_CHARS = 1500
+TTS_MAX_CHARS = 200
 
 
 # ============================================================
-# AI ERROR MESSAGE
+# STANDARD AI ERROR
 # ============================================================
 
-AI_ERROR_MESSAGE = (
-    "No AI response. Try again."
-)
+AI_ERROR_MESSAGE = "No AI response. Try again."
 
 
 # ============================================================
@@ -164,7 +149,6 @@ def wake():
 
             "hindi":
                 None
-
         }
 
         print(
@@ -263,20 +247,17 @@ def clean_text(text):
 
     text = text.strip()
 
-    # Remove markdown code blocks
     text = text.replace(
         "```",
         ""
     )
 
-    # Remove newlines
     text = re.sub(
         r"[\r\n]+",
         " ",
         text
     )
 
-    # Remove multiple spaces
     text = re.sub(
         r"\s+",
         " ",
@@ -299,10 +280,6 @@ def clean_tts_text(text):
     if not text:
         return ""
 
-    # --------------------------------------------------------
-    # Remove common AI prefixes
-    # --------------------------------------------------------
-
     prefixes = [
 
         "AI:",
@@ -322,10 +299,6 @@ def clean_tts_text(text):
                 len(prefix):
             ].strip()
 
-    # --------------------------------------------------------
-    # Remove markdown
-    # --------------------------------------------------------
-
     text = text.replace(
         "**",
         ""
@@ -341,24 +314,13 @@ def clean_tts_text(text):
         ""
     )
 
-    # --------------------------------------------------------
-    # IMPORTANT
-    #
-    # Orpheus English voice is being used.
-    #
-    # Remove Devanagari / unsupported Unicode.
-    #
-    # AI prompt already tells the model to use
-    # Roman Hindi / Hinglish.
-    # --------------------------------------------------------
-
+    # Remove unusual Unicode symbols
     text = re.sub(
         r"[^\x00-\x7F]+",
         " ",
         text
     )
 
-    # Multiple spaces
     text = re.sub(
         r"\s+",
         " ",
@@ -367,49 +329,32 @@ def clean_tts_text(text):
 
     text = text.strip()
 
-    # --------------------------------------------------------
-    # TTS LENGTH
-    #
-    # DO NOT cut at 200 characters anymore.
-    #
-    # Maximum is now 1500.
-    #
-    # We do NOT cut at punctuation because that can still
-    # remove the rest of a valid answer.
-    # --------------------------------------------------------
-
     if len(text) > TTS_MAX_CHARS:
-
-        print(
-            "TTS TEXT TOO LONG:",
-            len(text),
-            "characters"
-        )
-
-        print(
-            "TTS LIMIT:",
-            TTS_MAX_CHARS
-        )
 
         text = text[
             :TTS_MAX_CHARS
         ]
 
-        # Try to avoid cutting in the middle
-        # of a word.
+        positions = [
 
-        last_space = text.rfind(" ")
+            text.rfind("."),
 
-        if last_space > 100:
+            text.rfind("?"),
+
+            text.rfind("!"),
+
+            text.rfind(",")
+        ]
+
+        best = max(
+            positions
+        )
+
+        if best >= 40:
 
             text = text[
-                :last_space
+                :best + 1
             ]
-
-    print(
-        "FINAL TTS TEXT LENGTH:",
-        len(text)
-    )
 
     return text.strip()
 
@@ -494,269 +439,151 @@ def get_ai_reply(
     # ========================================================
 
     system_prompt = """
-
 You are Diana, a friendly female voice assistant for
 Avitron Aerospace Pvt. Ltd.
 
 You are designed for voice interaction.
 
 ============================================================
-MAIN KNOWLEDGE AREAS
+MAIN AREAS
 ============================================================
 
-Your main areas are:
+Your main knowledge and assistance areas are:
 
 STEM education.
-
 Robotics.
-
 Artificial Intelligence.
-
 AI projects.
-
-Machine learning education.
-
 Electronics.
-
 Embedded systems.
-
 ESP32.
-
 Arduino.
-
 Microcontrollers.
-
 Sensors.
-
 Actuators.
-
 Robotics projects.
-
-Programming related to robotics.
-
-Programming related to AI.
-
-Programming related to electronics.
-
+AI and machine learning education.
+Electronics projects.
+Programming related to robotics, AI and electronics.
 Science and technology education.
-
 Aerospace technology.
-
 Educational aerospace technology.
-
 Avitron Aerospace Pvt. Ltd.
 
 ============================================================
-BASIC CONVERSATION
+BASIC CONVERSATION IS ALLOWED
 ============================================================
 
-Basic conversation is ALWAYS allowed.
+You can also answer normal basic conversational questions
+about yourself and simple greetings.
 
-You can answer:
+Examples:
 
-Hello.
-
-Hi.
-
-Hey.
-
-Good morning.
-
-Good afternoon.
-
-Good evening.
-
+Hello
+Hi
+Hey
+Good morning
+Good evening
 How are you?
-
 How are you doing?
-
 What is your name?
-
 Who are you?
-
 What can you do?
-
 Who made you?
-
-Where are you from?
-
-Thank you.
-
-Thanks.
-
-Goodbye.
-
-Bye.
-
-Nice to meet you.
+Thank you
+Thanks
+Goodbye
+Bye
+Nice to meet you
 
 Examples:
 
 User:
 Hello
 
-Answer:
+Good:
 Hello! How can I help you today?
 
 User:
 How are you?
 
-Answer:
+Good:
 I am doing great. How can I help you?
 
 User:
 What is your name?
 
-Answer:
+Good:
 My name is Diana.
 
 User:
 Who are you?
 
-Answer:
+Good:
 I am Diana, a voice assistant for Avitron Aerospace.
 
 User:
 What can you do?
 
-Answer:
+Good:
 I can help with STEM education, AI, robotics, electronics
 and related technology.
 
 User:
 Thank you.
 
-Answer:
+Good:
 You're welcome!
 
 User:
 Goodbye.
 
-Answer:
+Good:
 Goodbye! Have a great day.
 
 ============================================================
 DOMAIN RULE
 ============================================================
 
-If the question is related to:
-
-STEM education,
-AI,
-Artificial Intelligence,
-robotics,
-electronics,
-embedded systems,
-ESP32,
-Arduino,
-microcontrollers,
-sensors,
-programming,
-science,
-technology,
-aerospace,
-educational technology,
-or Avitron Aerospace Pvt. Ltd.
-
-answer helpfully.
+If the user's question is related to STEM education,
+robotics, AI, electronics, embedded systems, aerospace
+or Avitron Aerospace Pvt. Ltd., answer helpfully.
 
 Basic conversational questions are also allowed.
 
-============================================================
-UNRELATED QUESTIONS
-============================================================
+If the question is completely unrelated to these areas and
+is not a basic conversational question, do not answer it.
 
-If the question is completely unrelated to:
+Instead politely say:
 
-STEM,
-education,
-AI,
-robotics,
-electronics,
-embedded systems,
-science,
-technology,
-aerospace,
-Avitron Aerospace,
-
-and it is NOT a basic conversational question,
-
-do not answer the unrelated topic.
-
-Instead say:
-
-I can help with STEM education, AI, robotics, electronics
-and related technology. What would you like to learn?
-
-For Hindi/Hinglish:
-
-Main STEM education, AI, robotics, electronics aur related
-technology mein help kar sakti hoon. Aap kya poochna chahenge?
+"I can help with STEM education, AI, robotics, electronics
+and related technology. What would you like to learn?"
 
 ============================================================
-AVITRON AEROSPACE RULE
+LANGUAGE RULE
 ============================================================
 
-If the user asks about Avitron Aerospace Pvt. Ltd.:
-
-Only provide information that you actually know.
-
-Never invent:
-
-Company facts.
-
-Courses.
-
-Products.
-
-Facilities.
-
-Employees.
-
-Addresses.
-
-Achievements.
-
-Partnerships.
-
-Certifications.
-
-Programs.
-
-If exact information is not available, say:
-
-Is information ke baare mein mere paas abhi exact details
-nahi hain. Aap Avitron ke STEM, robotics, AI, electronics
-ya aerospace programs ke baare mein pooch sakte hain.
-
-============================================================
-LANGUAGE
-============================================================
-
-The user can speak:
+The user may speak:
 
 English.
-
 Hindi.
-
 Hinglish.
-
 Roman Hindi.
 
 Understand the intended meaning.
 
-If user speaks English:
+If the user speaks English:
 answer in natural English.
 
-If user speaks Hindi:
+If the user speaks Hindi:
 answer in natural Roman Hindi or Hinglish.
 
-If user speaks Hinglish:
+If the user speaks Hinglish:
 answer in natural Hinglish.
 
 IMPORTANT:
 
-NEVER use Devanagari Hindi script.
+Never use Devanagari Hindi script.
 
 Hindi must ALWAYS be written using English/Roman letters.
 
@@ -765,59 +592,91 @@ Examples:
 User:
 Aap kaise ho?
 
-Answer:
+Good:
 Main bilkul theek hoon. Aap kaise hain?
 
 User:
 Aapka naam kya hai?
 
-Answer:
+Good:
 Mera naam Diana hai.
 
 User:
 Aap kya kar sakti ho?
 
-Answer:
+Good:
 Main STEM education, AI, robotics aur electronics mein
 aapki madad kar sakti hoon.
 
 User:
 Robotics kya hoti hai?
 
-Answer:
+Good:
 Robotics ek technology field hai jisme robots ko design,
 build aur program kiya jata hai.
 
 User:
 ESP32 kya hai?
 
-Answer:
+Good:
 ESP32 ek powerful microcontroller hai jo robotics aur
 IoT projects mein kaafi useful hai.
 
 ============================================================
-VOICE ANSWER RULE
+AVITRON RULE
 ============================================================
 
-You are speaking through a voice assistant.
+If the user asks specifically about Avitron Aerospace Pvt. Ltd.,
+only provide information that is actually known.
 
-Make answers natural and easy to speak.
+Never invent:
 
-Usually answer in one or two sentences.
+Company facts.
+Courses.
+Products.
+Facilities.
+Employees.
+Addresses.
+Achievements.
+Programs.
+Certifications.
+Partnerships.
 
-For technical questions, use up to three short sentences
+If you do not know a specific Avitron fact, say:
+
+"Is information ke baare mein mere paas abhi exact details
+nahi hain. Aap Avitron ke STEM, robotics, AI, electronics
+ya aerospace programs ke baare mein pooch sakte hain."
+
+============================================================
+TECHNICAL ANSWER RULE
+============================================================
+
+For beginner questions:
+explain simply.
+
+For technical questions:
+give accurate and practical information.
+
+For project questions:
+give useful components and steps when appropriate.
+
+Do not unnecessarily make answers complicated.
+
+============================================================
+VOICE STYLE
+============================================================
+
+You are a voice assistant.
+
+Keep answers natural and easy to speak.
+
+Usually use one or two short sentences.
+
+Technical questions can use up to three short sentences
 when necessary.
 
-DO NOT unnecessarily shorten a useful answer.
-
-DO NOT stop an answer in the middle of a sentence.
-
-DO NOT cut important information just to make the answer
-short.
-
-Try to keep normal answers below 400 characters.
-
-Technical answers may be longer when necessary.
+Keep answers under about 180 characters whenever possible.
 
 No markdown.
 
@@ -831,25 +690,25 @@ Do not repeat the user's question.
 
 Do not say "As an AI".
 
-Sound friendly.
+Sound friendly, warm and conversational.
 
-Sound natural.
-
-Sound conversational.
+Do not sound robotic.
 
 ============================================================
-IMPORTANT TTS RULE
+UNRELATED QUESTION RESPONSE
 ============================================================
 
-The response will be spoken by an English voice.
+If the user asks something unrelated, respond politely.
 
-Therefore:
+English:
 
-Do not use Devanagari.
+"I can help with STEM education, AI, robotics, electronics
+and related technology. What would you like to learn?"
 
-Use English or Roman Hindi.
+Hindi/Hinglish:
 
-Do not include unnecessary special characters.
+"Main STEM education, AI, robotics, electronics aur related
+technology mein help kar sakti hoon. Aap kya poochna chahenge?"
 
 ============================================================
 
@@ -861,20 +720,15 @@ Return ONLY the final answer.
     # ========================================================
 
     user_content = f"""
-
 Hindi speech recognition:
-
 {hindi_text if hindi_text else "No result"}
 
-
 English speech recognition:
-
 {english_text if english_text else "No result"}
-
 
 Understand the user's intended meaning.
 
-Answer according to Diana's rules.
+Answer naturally according to Diana's rules.
 
 Return only the final answer.
 """
@@ -911,7 +765,7 @@ Return only the final answer.
             0.2,
 
         "max_completion_tokens":
-            500,
+            250,
 
         "stream":
             False
@@ -981,13 +835,13 @@ Return only the final answer.
             )
 
             print(
-                response.text[:5000]
+                response.text[:3000]
             )
 
             return AI_ERROR_MESSAGE
 
         # ====================================================
-        # JSON
+        # JSON ERROR
         # ====================================================
 
         try:
@@ -1087,11 +941,6 @@ Return only the final answer.
         print("AI REPLY:")
         print(reply)
 
-        print(
-            "AI REPLY LENGTH:",
-            len(reply)
-        )
-
         print("========================================")
 
         return reply
@@ -1132,10 +981,6 @@ Return only the final answer.
 
 def generate_tts(text):
 
-    # ========================================================
-    # CLEAN TTS TEXT
-    # ========================================================
-
     text = clean_tts_text(
         text
     )
@@ -1151,11 +996,6 @@ def generate_tts(text):
     )
 
     print(
-        "TTS TEXT LENGTH:",
-        len(text)
-    )
-
-    print(
         "TTS MODEL:",
         TTS_MODEL
     )
@@ -1163,11 +1003,6 @@ def generate_tts(text):
     print(
         "TTS VOICE:",
         TTS_VOICE
-    )
-
-    print(
-        "TTS MAX CHARS:",
-        TTS_MAX_CHARS
     )
 
     if not text:
@@ -1216,10 +1051,6 @@ def generate_tts(text):
         "Accept":
             "audio/wav"
     }
-
-    # ========================================================
-    # TTS REQUEST
-    # ========================================================
 
     try:
 
@@ -1342,8 +1173,6 @@ def generate_tts(text):
             type(e).__name__,
             str(e)
         )
-
-        traceback.print_exc()
 
         return None
 
@@ -1855,9 +1684,7 @@ def test_tts():
 
     test_text = (
         "Hello, I am Diana. "
-        "I can help you with STEM education, "
-        "artificial intelligence, robotics, "
-        "electronics, embedded systems and aerospace technology."
+        "How can I help you with STEM, robotics, AI or electronics?"
     )
 
     audio_data = generate_tts(
@@ -1931,11 +1758,6 @@ if __name__ == "__main__":
     print(
         "TTS VOICE:",
         TTS_VOICE
-    )
-
-    print(
-        "TTS MAX CHARS:",
-        TTS_MAX_CHARS
     )
 
     print(
