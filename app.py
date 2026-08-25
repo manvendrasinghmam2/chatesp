@@ -41,10 +41,10 @@ TTS_MODEL = os.environ.get(
     "canopylabs/orpheus-v1-english"
 )
 
-# Diana = female voice
+# Female voice
 TTS_VOICE = os.environ.get(
     "TTS_VOICE",
-    "hannah"
+    "autumn"
 )
 
 # Orpheus input maximum
@@ -346,6 +346,10 @@ def get_ai_reply(
         english_text
     )
 
+    # ========================================================
+    # AI KEY MISSING
+    # ========================================================
+
     if not AI_API_KEY:
 
         print(
@@ -355,6 +359,10 @@ def get_ai_reply(
         return (
             "No AI response. Try again."
         )
+
+    # ========================================================
+    # INVALID QUERY
+    # ========================================================
 
     if (
         not is_valid_query(hindi_text)
@@ -367,14 +375,7 @@ def get_ai_reply(
         )
 
     # ========================================================
-    # IMPORTANT:
-    # TTS MODEL IS ENGLISH.
-    #
-    # Therefore AI response is requested in:
-    # English OR Roman Hindi / Hinglish.
-    #
-    # Devanagari Hindi is avoided because the TTS model
-    # is the English Orpheus model.
+    # AI SYSTEM PROMPT
     # ========================================================
 
     system_prompt = """
@@ -523,6 +524,10 @@ Determine the intended meaning and answer naturally.
             response.status_code
         )
 
+        # ====================================================
+        # AI SERVER ERROR
+        # ====================================================
+
         if response.status_code != 200:
 
             print(
@@ -534,8 +539,12 @@ Determine the intended meaning and answer naturally.
             )
 
             return (
-                "No AI response. Try again"
+                "No AI response. Try again."
             )
+
+        # ====================================================
+        # JSON ERROR
+        # ====================================================
 
         try:
 
@@ -552,6 +561,10 @@ Determine the intended meaning and answer naturally.
                 "No AI response. Try again."
             )
 
+        # ====================================================
+        # CHOICES CHECK
+        # ====================================================
+
         choices = data.get(
             "choices"
         )
@@ -567,8 +580,12 @@ Determine the intended meaning and answer naturally.
             )
 
             return (
-                "AI response nahi mil saka."
+                "No AI response. Try again."
             )
+
+        # ====================================================
+        # MESSAGE
+        # ====================================================
 
         message = choices[0].get(
             "message",
@@ -591,6 +608,10 @@ Determine the intended meaning and answer naturally.
             reply
         )
 
+        # ====================================================
+        # REMOVE PREFIX
+        # ====================================================
+
         prefixes = [
             "AI:",
             "Answer:",
@@ -608,6 +629,10 @@ Determine the intended meaning and answer naturally.
                     len(prefix):
                 ].strip()
 
+        # ====================================================
+        # EMPTY REPLY
+        # ====================================================
+
         if not reply:
 
             return (
@@ -622,6 +647,10 @@ Determine the intended meaning and answer naturally.
 
         return reply
 
+    # ========================================================
+    # TIMEOUT
+    # ========================================================
+
     except requests.exceptions.Timeout:
 
         print(
@@ -632,6 +661,10 @@ Determine the intended meaning and answer naturally.
             "No AI response. Try again."
         )
 
+    # ========================================================
+    # CONNECTION ERROR
+    # ========================================================
+
     except requests.exceptions.ConnectionError:
 
         print(
@@ -641,6 +674,10 @@ Determine the intended meaning and answer naturally.
         return (
             "No AI response. Try again."
         )
+
+    # ========================================================
+    # OTHER ERROR
+    # ========================================================
 
     except Exception as e:
 
@@ -703,9 +740,7 @@ def generate_tts(text):
         return None
 
     # ========================================================
-    # GROQ ORPHEUS DOCUMENTED PAYLOAD
-    #
-    # DO NOT SEND unsupported/custom fields here.
+    # GROQ ORPHEUS PAYLOAD
     # ========================================================
 
     payload = {
@@ -1010,6 +1045,10 @@ def upload_audio():
         )
 
         print("========================================")
+
+        # ====================================================
+        # NO AUDIO
+        # ====================================================
 
         if not audio_data:
 
