@@ -1,5 +1,6 @@
 Flask
-requests
-SpeechRecognition
-piper-tts
 gunicorn
+SpeechRecognition
+gTTS
+groq
+requests
